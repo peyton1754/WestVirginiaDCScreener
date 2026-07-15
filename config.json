@@ -1,0 +1,81 @@
+{
+  "state": "TN",
+  "state_fips": "47",
+  "target_crs": "EPSG:5070",
+
+  "filters": {
+    "transmission_mi": 5,
+    "transmission_min_kv": 230,
+    "substation_mi": 3,
+    "substation_min_kv": 115,
+    "gas_pipeline_mi": 10,
+    "urban_area_mi": 60,
+    "urban_min_land_area_m2": 200000000,
+    "fiber_mi": 10,
+    "superfund_buffer_mi": 0.5,
+    "flood_zones": ["A", "AE", "AH", "AO", "AR", "VE", "V"],
+    "min_parcel_acres": 25,
+    "fema_workers": 20
+  },
+
+  "scoring": {
+    "gas_pipeline_max_pts": 20,
+    "brownfield_type_max_pts": 20,
+    "state_tier_max_pts": 18,
+    "substation_max_pts": 15,
+    "tx_redundancy_max_pts": 10,
+    "water_max_pts": 10,
+    "metro_max_pts": 10,
+    "utility_rate_max_pts": 10,
+    "parcel_max_pts": 5,
+    "air_permit_max_pts": 5
+  },
+
+  "retirement_multiplier": {
+    "HIGH": 1.00,
+    "MEDIUM": 0.90,
+    "LOW": 0.75,
+    "ACTIVE_WARNING": 0.50,
+    "UNVERIFIED": 0.70
+  },
+
+  "candidate_sources": {
+    "eia_min_mw": 50,
+    "frs_naics_prefixes": ["321", "322", "324", "325", "327", "331"],
+    "dedup_radius_m": 500,
+    "pathway_b_min_signals": 2
+  },
+
+  "active_company_patterns": [
+    "quikrete", "cemex", "holcim", "lafarge", "crh", "oldcastle",
+    "eagle materials", "martin marietta", "vulcan materials",
+    "thermo fisher", "kaiser aluminum", "clayton homes", "berkshire",
+    "concrete batch", "batch plant", "hot mix", "concrete plant",
+    "prysmian", "general cable", "mcwane", "tyler pipe",
+    "nucor", "ssab", "outokumpu",
+    "terminal", "treatment plant", "wastewater",
+    "eastman chemical", "wacker chemie", "bridgestone", "nissan",
+    "volkswagen", "amazon", "google", "meta", "microsoft"
+  ],
+
+  "active_operator_patterns": [
+    "exxon", "mobil", "chevron", "marathon",
+    "shell", "dow", "dupont",
+    "huntsman", "celanese", "eastman",
+    "air liquide", "air products", "linde", "praxair",
+    "nucor", "gerdau", "commercial metals", "steel",
+    "ssab", "outokumpu",
+    "prysmian", "mcwane",
+    "martin marietta", "cemex", "holcim", "crh", "quikrete",
+    "tva", "tennessee valley authority",
+    "nashville electric", "knoxville utilities", "memphis light gas water"
+  ],
+
+  "data_paths": {
+    "raw": "data/raw",
+    "tennessee_raw": "data/tennessee/raw",
+    "processed": "data/processed",
+    "output_csv": "outputs/csv",
+    "output_geojson": "outputs/geojson"
+  }
+}
