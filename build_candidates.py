@@ -800,6 +800,25 @@ try:
         print(f"  {n_before:,} → {len(srp_raw):,} after excluding sites already "
               f"redeveloped or ready-for-use")
 
+        # Exclude federally/state protected parkland — legally undevelopable
+        # regardless of infrastructure merit. EPA's ACRES data includes some
+        # large tracts with legacy industrial history that are now protected
+        # (e.g. Palo Alto Battlefield National Historical Park in TX, former
+        # ranchland now NPS-managed) — not real redevelopment candidates.
+        PROTECTED_LAND_PATTERNS = [
+            r"national\s+historical?\s+park", r"national\s+park",
+            r"state\s+park", r"wildlife\s+refuge", r"national\s+monument",
+            r"national\s+forest", r"national\s+recreation\s+area",
+        ]
+        is_protected = srp_raw["Property_Name"].astype(str).str.lower().str.contains(
+            "|".join(PROTECTED_LAND_PATTERNS), regex=True, na=False
+        )
+        n_protected = is_protected.sum()
+        srp_raw = srp_raw[~is_protected].copy()
+        if n_protected:
+            print(f"  Excluded {n_protected} protected park/monument site(s) "
+                  f"(not legally developable regardless of infrastructure)")
+
         def _srp_brownfield_type(row):
             text = f"{row.get('Property_Name','')} {row.get('Property_Highlights','')}".lower()
             for keyword, label in [
