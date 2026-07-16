@@ -1,17 +1,19 @@
 """
 build_candidates_al.py
-Builds the candidate site pool for Tennessee from five sources:
+Builds the candidate site pool for West Virginia from six sources:
   1. EIA Form 860 retired generators (power plants ≥50 MW)
   2. EPA FRS manufacturing facilities (paper, steel, chemicals, refineries)
-  3. OSM industrial landuse polygons (catch-all for unmapped brownfields)
-  4. EPA ACRES brownfields (formally enrolled EPA grant-program brownfields)
-  5. EPA SEMS/RCRA brownfields (corroboration registry)
+  3. EPA TRI closed facilities
+  4. OSM industrial landuse polygons (catch-all for unmapped brownfields)
+  5. EPA Superfund Redevelopment Mapper brownfields >100 acres, no reported
+     redevelopment (curated ACRES subset, see EPA-540-S-26-001)
+  6. EPA ACRES/SEMS/RCRA brownfields (corroboration registry, not standalone)
 
 All sources are standardised to a common schema, deduplicated by proximity,
 and saved as a single GeoDataFrame in EPSG:5070.
 
-Output: data/processed/candidates_al.gpkg
-        data/processed/candidates_al.csv
+Output: data/processed/candidates_wv.gpkg
+        data/processed/candidates_wv.csv
 """
 
 import re
@@ -31,12 +33,12 @@ RAW        = ROOT / "data" / "raw"
 EIA_DIR    = RAW / "eia860"
 FRS_DIR    = RAW / "frs"
 OSM_DIR    = RAW / "osm"
-TENNESSEE    = ROOT / "data" / "tennessee" / "raw"
+TENNESSEE    = ROOT / "data" / "westvirginia" / "raw"
 BF_DIR     = TENNESSEE / "brownfields"
 PROC_DIR   = ROOT / "data" / "processed"
 PROC_DIR.mkdir(exist_ok=True)
 
-TARGET_STATES = ["TN"]
+TARGET_STATES = ["WV"]
 STATE         = "_".join(sorted(TARGET_STATES)).lower()
 MIN_MW        = 50
 TARGET_CRS    = "EPSG:5070"
@@ -89,7 +91,7 @@ def clean_col(name: str) -> str:
 # Source 1: EIA 860 Retired Generators
 # ---------------------------------------------------------------------------
 print("=" * 60)
-print("Source 1 — EIA 860 Retired Power Plants (TN)")
+print("Source 1 — EIA 860 Retired Power Plants (WV)")
 print("=" * 60)
 
 gen = pd.read_excel(
@@ -167,12 +169,12 @@ print(f"  EIA 860 candidates: {len(eia_gdf):,} plants")
 # Confirmed Brownfield Registry
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("Building Confirmed Brownfield Registry (TN)")
+print("Building Confirmed Brownfield Registry (WV)")
 print("=" * 60)
 
 def load_confirmed_ids(path: Path, label: str) -> set:
     if not path.exists():
-        print(f"  [skip] {label} — file not found, run download_tennessee.py")
+        print(f"  [skip] {label} — file not found, run download_westvirginia.py")
         return set()
     gj = gpd.read_file(path)
     gj.columns = [c.upper() for c in gj.columns]
@@ -198,7 +200,7 @@ print(f"  Strong (ACRES+SEMS): {len(strong_ids):,} | Weak (RCRA-only): {len(rcra
 # Source 2: EPA FRS Manufacturing Facilities
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("Source 2 — EPA FRS Manufacturing Facilities (TN)")
+print("Source 2 — EPA FRS Manufacturing Facilities (WV)")
 print("=" * 60)
 
 frs_frames = []
@@ -483,10 +485,10 @@ else:
 # Source 3: EPA TRI (Toxics Release Inventory) — closed industrial reporters
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("Source 3 — EPA TRI Closed Facilities (TN)")
+print("Source 3 — EPA TRI Closed Facilities (WV)")
 print("=" * 60)
 
-TRI_CACHE = TENNESSEE / "tri_tn_facilities.csv"
+TRI_CACHE = TENNESSEE / "tri_wv_facilities.csv"
 TRI_NAICS_PREFIXES = FRS_NAICS_PREFIXES  # same target sectors
 
 tri_gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs=TARGET_CRS))
@@ -502,7 +504,7 @@ try:
         while True:
             url = (
                 f"https://data.epa.gov/efservice/TRI_FACILITY"
-                f"/STATE_ABBR/TN/{offset}:{offset+1999}"
+                f"/STATE_ABBR/WV/{offset}:{offset+1999}"
             )
             resp = _req_tri.get(url, timeout=30)
             if not resp.ok:
@@ -519,10 +521,10 @@ try:
         print()
         tri_raw = pd.DataFrame(rows)
         tri_raw.to_csv(TRI_CACHE, index=False)
-        print(f"  Downloaded {len(tri_raw):,} TN TRI facilities → {TRI_CACHE.name}")
+        print(f"  Downloaded {len(tri_raw):,} WV TRI facilities → {TRI_CACHE.name}")
     else:
         tri_raw = pd.read_csv(TRI_CACHE, low_memory=False)
-        print(f"  Loaded {len(tri_raw):,} TN TRI facilities from cache")
+        print(f"  Loaded {len(tri_raw):,} WV TRI facilities from cache")
 
     # TRI_FACILITY columns: FACILITY_NAME, FAC_CLOSED_IND, TRI_FACILITY_ID,
     # EPA_REGISTRY_ID (= FRS REGISTRY_ID), FAC_LATITUDE/FAC_LONGITUDE (DDMMSS),
@@ -550,7 +552,7 @@ try:
     tri_closed.loc[fac_lat_mask, "_lon"] = -(tri_closed.loc[fac_lat_mask, "FAC_LONGITUDE"].apply(_ddmmss_to_dd))
 
     tri_closed = tri_closed[tri_closed["_lat"].between(34, 37) & tri_closed["_lon"].between(-91, -81)]
-    print(f"  With valid TN coordinates: {len(tri_closed):,}")
+    print(f"  With valid WV coordinates: {len(tri_closed):,}")
 
     # Join NAICS from FRS NAICS file via EPA_REGISTRY_ID
     frs_naics_path = FRS_DIR / "TN_NAICS_FILE.CSV"
@@ -588,7 +590,7 @@ try:
             "source":       "TRI",
             "site_id":      "TRI_" + tri_sector["TRI_FACILITY_ID"].astype(str).values,
             "Plant_Name":   tri_sector["FACILITY_NAME"].values,
-            "State":        tri_sector.get("STATE_ABBR", pd.Series("TN", index=tri_sector.index)).values,
+            "State":        tri_sector.get("STATE_ABBR", pd.Series("WV", index=tri_sector.index)).values,
             "County":       tri_sector.get("COUNTY_NAME", pd.Series("", index=tri_sector.index)).values,
             "Street_Address": tri_sector.get("STREET_ADDRESS", pd.Series("", index=tri_sector.index)).values,
             "City":         tri_sector.get("CITY_NAME", pd.Series("", index=tri_sector.index)).values,
@@ -615,10 +617,10 @@ except Exception as _e_tri:
 # Source 4: OSM Industrial Landuse
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("Source 4 — OSM Industrial Landuse Polygons (TN)")
+print("Source 4 — OSM Industrial Landuse Polygons (WV)")
 print("=" * 60)
 
-osm_path = OSM_DIR / "industrial_landuse_tn.geojson"
+osm_path = OSM_DIR / "industrial_landuse_wv.geojson"
 if not osm_path.exists():
     osm_path = OSM_DIR / "industrial_landuse.geojson"
 
@@ -744,13 +746,116 @@ print("\n  (ACRES/SEMS/RCRA used for FRS corroboration only — not standalone s
 
 
 # ---------------------------------------------------------------------------
+# Source 5: EPA Superfund Redevelopment Mapper — Brownfields >100 acres
+# ---------------------------------------------------------------------------
+# Curated ACRES subset EPA built for exactly this reuse case (see EPA-540-S-26-001,
+# "Guidance on the Redevelopment of Superfund and Brownfield Sites as AI Data
+# Centers", Jan 2026): brownfield properties >100 acres with no reported
+# redevelopment. Comes with pre-computed proximity flags (electric line, rail,
+# highway, water) that double as a free sanity check against filter_pipeline.py's
+# own spatial filters.
+print("\n" + "=" * 60)
+print("Source 5 — EPA Redevelopment Mapper Brownfields >100ac (WV)")
+print("=" * 60)
+
+SRP_CACHE = TENNESSEE / "srp_redev_mapper_wv.csv"
+SRP_URL = (
+    "https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/"
+    "Brownfield_Properties_Over_100_Acres_view/FeatureServer/0/query"
+)
+
+redev_gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs=TARGET_CRS))
+
+try:
+    if not SRP_CACHE.exists():
+        SRP_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        import requests as _req_srp
+        print("  Downloading EPA Redevelopment Mapper brownfields …")
+        all_feats = []
+        for state in TARGET_STATES:
+            resp = _req_srp.get(SRP_URL, params={
+                "where": f"State='{state}'",
+                "outFields": "*",
+                "f": "json",
+            }, timeout=30)
+            resp.raise_for_status()
+            feats = resp.json().get("features", [])
+            all_feats.extend(f["attributes"] for f in feats)
+        srp_raw = pd.DataFrame(all_feats)
+        srp_raw.to_csv(SRP_CACHE, index=False)
+        print(f"  Downloaded {len(srp_raw):,} sites (>100 acres) → {SRP_CACHE.name}")
+    else:
+        srp_raw = pd.read_csv(SRP_CACHE, low_memory=False)
+        print(f"  Loaded {len(srp_raw):,} sites from cache")
+
+    if len(srp_raw) > 0:
+        srp_raw = srp_raw.dropna(subset=["Latitude", "Longitude"])
+
+        # Exclude sites already redeveloped or marked ready-for-use — we want
+        # undeveloped brownfield land, not a site a competitor already built on.
+        already_ready = srp_raw["Ready_for_Anticipated_Use_"].astype(str).str.strip() == "Yes"
+        has_redev_date = srp_raw["Redevelopment_Start_Date"].notna()
+        n_before = len(srp_raw)
+        srp_raw = srp_raw[~(already_ready | has_redev_date)].copy()
+        print(f"  {n_before:,} → {len(srp_raw):,} after excluding sites already "
+              f"redeveloped or ready-for-use")
+
+        def _srp_brownfield_type(row):
+            text = f"{row.get('Property_Name','')} {row.get('Property_Highlights','')}".lower()
+            for keyword, label in [
+                ("paper", "Paper/Pulp Mill"), ("pulp", "Paper/Pulp Mill"),
+                ("steel", "Steel/Metals Plant"), ("smelt", "Steel/Metals Plant"),
+                ("foundry", "Steel/Metals Plant"), ("mill", "Steel/Metals Plant"),
+                ("refin", "Petroleum Refinery"), ("chemi", "Chemical Plant"),
+                ("cement", "Minerals/Cement Plant"),
+            ]:
+                if keyword in text:
+                    return label
+            return "Industrial" if str(row.get("Industrial", "")).strip() == "Yes" else "Other Brownfield"
+
+        srp_raw["brownfield_type"] = srp_raw.apply(_srp_brownfield_type, axis=1)
+
+        redev_gdf = gpd.GeoDataFrame({
+            "source":         "SRP_REDEV_MAPPER",
+            "site_id":        "SRP_" + srp_raw["Property_ID"].astype(str),
+            "Plant_Name":     srp_raw["Property_Name"],
+            "State":          srp_raw["State"],
+            "County":         "",
+            "Street_Address": srp_raw["Address"].fillna(""),
+            "City":           srp_raw["City"].fillna(""),
+            "Latitude":       srp_raw["Latitude"],
+            "Longitude":      srp_raw["Longitude"],
+            "brownfield_type": srp_raw["brownfield_type"],
+            "total_mw":       np.nan,
+            "retirement_year": np.nan,
+            "technology":     "",
+            "Grid_Voltage_kV": np.nan,
+            "Natural_Gas_Pipeline_Name_1": "",
+            "Name_of_Water_Source": "",
+            "naics_code":     "",
+            "has_air_permit": False,
+            "geometry":       gpd.points_from_xy(srp_raw["Longitude"], srp_raw["Latitude"]),
+        }, crs="EPSG:4326").to_crs(TARGET_CRS)
+
+        print(f"  Redevelopment Mapper candidates: {len(redev_gdf):,} sites "
+              f"(all ≥100 acres by construction)")
+        for bt, grp in redev_gdf.groupby("brownfield_type"):
+            print(f"    {bt}: {len(grp):,}")
+    else:
+        print("  No sites returned for target state(s).")
+
+except Exception as _e_srp:
+    print(f"  [warn] Redevelopment Mapper source failed: {_e_srp}")
+
+
+# ---------------------------------------------------------------------------
 # Combine all sources
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
 print("Combining all sources")
 print("=" * 60)
 
-all_frames = [df for df in [eia_gdf, frs_gdf, tri_gdf, osm_gdf] if len(df) > 0]
+all_frames = [df for df in [eia_gdf, redev_gdf, frs_gdf, tri_gdf, osm_gdf] if len(df) > 0]
 
 common_cols = [c for c in SCHEMA if c != "geometry"]
 for i, df in enumerate(all_frames):
@@ -770,11 +875,11 @@ print(f"  By source: {combined['source'].value_counts().to_dict()}")
 # Deduplicate by proximity (500m radius)
 # ---------------------------------------------------------------------------
 print(f"\nDeduplicating within {DEDUP_RADIUS_M}m radius …")
-print("  Priority: EIA860 > FRS > OSM")
+print("  Priority: EIA860 > SRP Redevelopment Mapper > FRS > TRI > OSM")
 
 combined["_source_order"] = combined["source"].map(
-    {"EIA860": 0, "FRS": 1, "TRI": 2, "OSM": 3}
-).fillna(4)
+    {"EIA860": 0, "SRP_REDEV_MAPPER": 1, "FRS": 2, "TRI": 3, "OSM": 4}
+).fillna(5)
 combined = combined.sort_values("_source_order").reset_index(drop=True)
 
 keep = []

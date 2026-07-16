@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 
 ROOT     = Path(__file__).parent
 PROC_DIR = ROOT / "data" / "processed"
-AL_RAW   = ROOT / "data" / "tennessee" / "raw"
+AL_RAW   = ROOT / "data" / "westvirginia" / "raw"
 STATE    = "tn"
 HEADERS  = {"User-Agent": "DataCenterScreener/1.0"}
 
@@ -147,59 +147,35 @@ print("\n" + "=" * 60)
 print("4. County GIS parcel services")
 print("=" * 60)
 
-# NOTE (2026-07-13): the original per-county endpoints below were re-verified
-# and most no longer work — county GIS providers migrate/rename services over
-# time. Davidson and Rutherford have working replacements found via ArcGIS
-# Hub search; Knox and Hamilton have no public REST parcel service left (both
-# now sit behind authenticated portals — KGIS returns 401, Hamilton's public
-# site exposes only interactive viewers, no REST endpoint). Shelby's own
-# assessor service errors server-side ("Invalid connection property" on its
-# owner table) but a Memphis 311 mirror still serves acreage (no owner).
-#
-# STATEWIDE_SVC is tried first for every site — the TN Comptroller's
-# statewide parcel layer covers ~90 of TN's 95 counties (smaller/rural
-# counties that use the state's own assessment system). It does NOT cover
-# Davidson, Shelby, Knox, Hamilton, Rutherford, or Montgomery, which run
-# their own systems — those fall through to COUNTY_SERVICES below.
+# Unlike Tennessee (whose statewide layer only covers ~90 of 95 counties,
+# with Davidson/Shelby/Knox/Hamilton/Rutherford/Montgomery needing their own
+# county-specific fallback endpoints), West Virginia's WVGIS statewide parcel
+# layer is a single composite covering all 55 counties — see fetch_parcels_wv.py
+# for how it was verified. No county-by-county fallback list is needed here.
 STATEWIDE_SVC = {
-    "url": "https://services1.arcgis.com/YuVBSS7Y1of2Qud1/arcgis/rest/services/Tennessee_Property_Boundaries_Public_Use/FeatureServer/0/query",
-    "owner": "OWNER", "acres": "DEEDAC",
+    "url": "https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer/0/query",
+    "owner": "FullOwnerName", "acres": "Acres_C",
 }
 
-COUNTY_SERVICES = {
-    # Davidson County (Nashville metro) — Metro Nashville GIS
-    "DAVIDSON": {
-        "url": "https://maps.nashville.gov/arcgis/rest/services/Cadastral/Parcels/MapServer/0/query",
-        "owner": "Owner", "acres": "DeededAcreage",
-    },
-    # Shelby County (Memphis) — county's own Assessor GIS is down server-side;
-    # this Memphis 311 mirror has acreage but no owner field.
-    "SHELBY": {
-        "url": "https://311.memphistn.gov/server/rest/services/311/ParcelCentroids/MapServer/1/query",
-        "owner": None, "acres": "CALC_ACRE",
-    },
-    # Rutherford County (Murfreesboro / Smyrna — Nissan auto corridor)
-    "RUTHERFORD": {
-        "url": "https://services5.arcgis.com/A5C0MR9xfkxVRwat/arcgis/rest/services/Parcel_Data/FeatureServer/1/query",
-        "owner": "Owner1", "acres": "TotalLandArea",
-    },
-    # Knox (KGIS requires authenticated login — no public REST parcel service)
-    # Hamilton (no public REST parcel service — only interactive Geocortex viewers)
-}
+COUNTY_SERVICES = {}
 
 def query_parcel_svc(svc, lon, lat):
     out_fields = ",".join(f for f in [
-        svc.get("owner"), svc.get("acres"), svc.get("value"),
-        svc.get("imp"), "Shape__Area",
+        svc.get("owner"), svc.get("acres"), svc.get("value"), svc.get("imp"),
     ] if f)
+    # WVGIS's WV_Parcels service errors out entirely (400 "Failed to execute
+    # query") on point+distance queries AND on an unrecognized "Shape__Area"
+    # outField — both verified live. It only accepts an envelope with just
+    # the fields it actually has. ~0.002° (~180m at WV's latitude) matches
+    # the old 200m point-buffer radius; Acres_C is always populated so the
+    # Shape__Area fallback this function used for TN isn't needed here.
+    pad = 0.002
     try:
         r = requests.get(svc["url"], params={
-            "geometry": f"{lon},{lat}",
-            "geometryType": "esriGeometryPoint",
+            "geometry": f"{lon-pad},{lat-pad},{lon+pad},{lat+pad}",
+            "geometryType": "esriGeometryEnvelope",
             "inSR": "4326",
             "spatialRel": "esriSpatialRelIntersects",
-            "distance": "200",
-            "units": "esriSRUnit_Meter",
             "outFields": out_fields,
             "returnGeometry": "false",
             "f": "json",
@@ -213,9 +189,6 @@ def query_parcel_svc(svc, lon, lat):
         best = max(feats, key=lambda f: float(f["attributes"].get(acres_field, 0) or 0))
         a = best["attributes"]
         acres = float(a.get(acres_field, 0) or 0) or None
-        if not acres:
-            sa = float(a.get("Shape__Area", 0) or 0)
-            acres = sa / 4046.86 if sa > 0 else None
         owner = str(a.get(owner_field, "")).strip() if owner_field else None
         imp   = float(a.get(svc.get("imp", ""), 0) or 0) or None
         return owner, acres, imp
@@ -228,7 +201,7 @@ for i in range(len(cands)):
     pt = cands_wgs.geometry.iloc[i]
 
     owner, acres, imp = query_parcel_svc(STATEWIDE_SVC, pt.x, pt.y)
-    source = "TN_STATEWIDE"
+    source = "WV_STATEWIDE"
     if (not owner and not acres) and county in COUNTY_SERVICES:
         owner, acres, imp = query_parcel_svc(COUNTY_SERVICES[county], pt.x, pt.y)
         source = f"COUNTY_GIS_{county}"
@@ -299,7 +272,7 @@ gen_operable = pd.read_excel(
     ROOT / "data" / "raw" / "eia860" / "3_1_Generator_Y2023.xlsx",
     sheet_name="Operable", header=1,
 )
-al_gen = gen_operable[gen_operable["State"] == "TN"].copy()
+al_gen = gen_operable[gen_operable["State"] == "WV"].copy()
 al_gen["Nameplate Capacity (MW)"] = pd.to_numeric(al_gen["Nameplate Capacity (MW)"], errors="coerce")
 # Normalise county names to uppercase
 al_gen["_county"] = al_gen["County"].str.upper().str.strip()
@@ -309,7 +282,7 @@ plant_al = pd.read_excel(
     ROOT / "data" / "raw" / "eia860" / "2___Plant_Y2023.xlsx",
     sheet_name="Plant", header=1,
 )
-plant_al = plant_al[plant_al["State"] == "TN"].copy()
+plant_al = plant_al[plant_al["State"] == "WV"].copy()
 plant_al["_county"] = plant_al["County"].str.upper().str.strip()
 county_utility = {}
 for _, p in plant_al.iterrows():

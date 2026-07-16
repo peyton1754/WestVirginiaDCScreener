@@ -1,6 +1,6 @@
 {
-  "state": "TN",
-  "state_fips": "47",
+  "state": "WV",
+  "state_fips": "54",
   "target_crs": "EPSG:5070",
 
   "filters": {
@@ -68,12 +68,13 @@
     "prysmian", "mcwane",
     "martin marietta", "cemex", "holcim", "crh", "quikrete",
     "tva", "tennessee valley authority",
-    "nashville electric", "knoxville utilities", "memphis light gas water"
+    "nashville electric", "knoxville utilities", "memphis light gas water",
+    "appalachian power", "mon power", "potomac edison", "firstenergy"
   ],
 
   "data_paths": {
     "raw": "data/raw",
-    "tennessee_raw": "data/tennessee/raw",
+    "westvirginia_raw": "data/westvirginia/raw",
     "processed": "data/processed",
     "output_csv": "outputs/csv",
     "output_geojson": "outputs/geojson"

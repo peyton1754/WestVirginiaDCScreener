@@ -1,18 +1,18 @@
 """
 download_data.py
-Downloads all free datasets needed for the Tennessee data center screening pipeline.
+Downloads all free datasets needed for the West Virginia data center screening pipeline.
 
 Reuses the same national datasets as the TX pipeline (HIFLD, Census, EPA)
-but downloads TN-specific FRS and NHD data.
+but downloads WV-specific FRS and NHD data.
 
 Sources:
   - EIA Form 860 (retired generators)           — shared with TX
   - HIFLD: Transmission Lines, Substations       — shared with TX
   - Census Urban Areas (2020)                    — shared with TX
   - EPA Nonattainment Areas                      — shared with TX
-  - NHD (National Hydrography Dataset)           — TN-specific
-  - EPA FRS Manufacturing                        — TN-specific
-  - OSM Industrial Landuse                       — TN-specific bbox
+  - NHD (National Hydrography Dataset)           — WV-specific
+  - EPA FRS Manufacturing                        — WV-specific
+  - OSM Industrial Landuse                       — WV-specific bbox
 
 Run: python3 download_data.py
 """
@@ -37,10 +37,11 @@ NHD_DIR    = RAW / "nhd"
 FRS_DIR    = RAW / "frs"
 OSM_DIR    = RAW / "osm"
 
-STATES = ["TN"]
+STATES = ["WV"]
 
 STATE_NAMES = {
-    "TN": "Tennessee",
+    # NHD's S3 filenames use an underscore, not a space, between words
+    "WV": "West_Virginia",
 }
 
 # ---------------------------------------------------------------------------
@@ -199,12 +200,12 @@ def download_hifld():
 
 def download_hifld_substations():
     """
-    Download TN substations from HIFLD (Electric Substations layer).
+    Download WV substations from HIFLD (Electric Substations layer).
     Replaces the previous OSM Overpass source which had incomplete voltage
     tagging and lower coverage. HIFLD provides MAX_VOLT, MIN_VOLT, LINES
     (connected line count), and STATUS for all US substations.
     """
-    print("\n=== HIFLD Substations (TN, ≥115kV in-service) ===")
+    print("\n=== HIFLD Substations (WV, ≥115kV in-service) ===")
     dest = HIFLD_DIR / "substations.geojson"
     if dest.exists():
         print(f"  [skip] substations.geojson already exists")
@@ -217,7 +218,7 @@ def download_hifld_substations():
     batch = 2000
     while True:
         r = requests.get(f"{BASE}/query", params={
-            "where": "STATE='TN'",
+            "where": "STATE='WV'",
             "outFields": "NAME,CITY,STATE,COUNTY,LATITUDE,LONGITUDE,MAX_VOLT,MIN_VOLT,STATUS,TYPE,LINES",
             "returnGeometry": "true",
             "outSR": "4326",
@@ -250,18 +251,18 @@ def download_hifld_substations():
     geojson = {"type": "FeatureCollection", "features": in_service}
     with open(dest, "w") as fh:
         _json.dump(geojson, fh)
-    print(f"  TN substations fetched: {len(features):,} total, {len(in_service):,} in-service ≥115kV")
+    print(f"  WV substations fetched: {len(features):,} total, {len(in_service):,} in-service ≥115kV")
     print(f"  Saved: {dest.name}")
 
 
 def download_osm_infrastructure():
     print("\n=== OSM Gas Pipelines ===")
     # Note: substations are now fetched from HIFLD (see download_hifld_substations).
-    # This OSM gas-pipeline layer is superseded by download_gas_pipelines_tn.py's
+    # This OSM gas-pipeline layer is superseded by download_gas_pipelines_wv.py's
     # EIA-sourced fetch (the one filter_pipeline.py actually reads) and is not
     # consumed downstream; kept only for reference/manual comparison.
 
-    BBOX = "34.9,-90.4,36.7,-81.6"
+    BBOX = "37.1,-82.7,40.7,-77.6"
     overpass_url = "https://overpass-api.de/api/interpreter"
 
     layers = {
@@ -364,11 +365,11 @@ def download_epa_nonattainment():
 
 
 # ---------------------------------------------------------------------------
-# 5. NHD Water Bodies — Tennessee
+# 5. NHD Water Bodies — West Virginia
 # ---------------------------------------------------------------------------
 
 def download_nhd():
-    print("\n=== NHD Water Bodies (Tennessee) ===")
+    print("\n=== NHD Water Bodies (West Virginia) ===")
     base_url = "https://prd-tnm.s3.amazonaws.com/StagedProducts/Hydrography/NHD/State/Shape/"
 
     for state in STATES:
@@ -384,13 +385,13 @@ def download_nhd():
 
 
 # ---------------------------------------------------------------------------
-# 6. EPA FRS Manufacturing — Tennessee
+# 6. EPA FRS Manufacturing — West Virginia
 # ---------------------------------------------------------------------------
 
 FRS_BASE = "https://ordsext.epa.gov/FLA/www3/state_files/state_combined_{state}.zip"
 
 def download_epa_frs():
-    print("\n=== EPA FRS (Manufacturing Brownfields — AL) ===")
+    print("\n=== EPA FRS (Manufacturing Brownfields — WV) ===")
     FRS_DIR.mkdir(parents=True, exist_ok=True)
 
     for state_abbr in STATES:
@@ -424,19 +425,19 @@ def download_epa_frs():
 
 
 # ---------------------------------------------------------------------------
-# 7. OSM Industrial Landuse — Tennessee bbox
+# 7. OSM Industrial Landuse — West Virginia bbox
 # ---------------------------------------------------------------------------
 
 def download_osm_industrial():
-    print("\n=== OSM Industrial Landuse Polygons (TN) ===")
+    print("\n=== OSM Industrial Landuse Polygons (WV) ===")
     OSM_DIR.mkdir(parents=True, exist_ok=True)
 
-    dest = OSM_DIR / "industrial_landuse_tn.geojson"
+    dest = OSM_DIR / "industrial_landuse_wv.geojson"
     if dest.exists():
         print(f"  [skip] {dest.name} already exists")
         return
 
-    BBOX = "34.9,-90.4,36.7,-81.6"
+    BBOX = "37.1,-82.7,40.7,-77.6"
 
     query = f"""
     [out:json][timeout:300];
@@ -449,7 +450,7 @@ def download_osm_industrial():
     out center tags;
     """
 
-    print("  Querying Overpass API for TN industrial landuse …")
+    print("  Querying Overpass API for WV industrial landuse …")
     try:
         resp = requests.post(
             "https://overpass-api.de/api/interpreter",
@@ -497,13 +498,13 @@ def download_osm_industrial():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Data Center Screener — Tennessee Dataset Download")
+    print("Data Center Screener — West Virginia Dataset Download")
     print("=" * 60)
 
     steps = [
         ("EIA 860", download_eia860),
         ("HIFLD Transmission Lines", download_hifld),
-        ("HIFLD Substations (TN)", download_hifld_substations),
+        ("HIFLD Substations (WV)", download_hifld_substations),
         ("OSM Gas Pipelines", download_osm_infrastructure),
         ("Census Urban Areas", download_census_urban_areas),
         ("EPA Nonattainment", download_epa_nonattainment),
@@ -526,5 +527,5 @@ if __name__ == "__main__":
         print("Check warnings above and download missing files manually.")
         sys.exit(1)
     else:
-        print("All Tennessee datasets downloaded successfully.")
+        print("All West Virginia datasets downloaded successfully.")
         print(f"Raw data in: {RAW}")

@@ -1,6 +1,6 @@
 """
 enrich_retirement_al.py  (v3 — permit trajectories, ownership, ready-for-reuse)
-Computes composite retirement confidence for Tennessee candidates.
+Computes composite retirement confidence for West Virginia candidates.
 
 Signal categories:
   1. EPA TRI facility closed flag
@@ -9,7 +9,7 @@ Signal categories:
   4. ICIS-NPDES permit terminations (terminated/expired water discharge permits)
   5. Entity ownership keywording (trust, redevelopment, holding, remediation)
   6. EPA "Ready for Reuse" — SEMS NPL-deleted sites + ACRES brownfield enrollment
-  7. Workforce Tennessee WARN Act (strict matching)
+  7. WorkForce West Virginia WARN Act (strict matching)
   8. Active operator name blocklist
 
 Run after enrich_candidates_al.py, before score_and_export_al.py.
@@ -30,13 +30,13 @@ warnings.filterwarnings("ignore")
 
 ROOT     = Path(__file__).parent
 PROC_DIR = ROOT / "data" / "processed"
-AL_RAW   = ROOT / "data" / "tennessee" / "raw"
-STATE    = "tn"
+AL_RAW   = ROOT / "data" / "westvirginia" / "raw"
+STATE    = "wv"
 
 HEADERS = {"User-Agent": "DataCenterScreener/1.0"}
 
 print("=" * 60)
-print("Tennessee Retirement Confidence Enrichment (v3)")
+print("West Virginia Retirement Confidence Enrichment (v3)")
 print("=" * 60)
 
 # ---------------------------------------------------------------------------
@@ -76,9 +76,9 @@ def _fetch_all(base_url, batch_size=10000):
         offset += batch_size
     return rows
 
-print("  Fetching TN TRI facility table …")
+print("  Fetching WV TRI facility table …")
 try:
-    fac_rows = _fetch_all("https://data.epa.gov/efservice/tri_facility/state_abbr/TN")
+    fac_rows = _fetch_all("https://data.epa.gov/efservice/tri_facility/state_abbr/WV")
     if fac_rows:
         fac_df = pd.DataFrame(fac_rows)
         fac_df["_name"] = fac_df["facility_name"].astype(str).str.upper().str.strip()
@@ -365,7 +365,7 @@ print(f"  Matched to reuse datasets: {n_reuse}/{len(cands)}")
 # 7. WARN Act — strict matching (cutoff 0.80)
 # ===================================================================
 print("\n" + "=" * 60)
-print("7. Workforce Tennessee WARN Act (strict)")
+print("7. WorkForce West Virginia WARN Act (strict)")
 print("=" * 60)
 
 cands["warn_match"] = ""

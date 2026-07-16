@@ -1,28 +1,31 @@
 """
-download_tennessee_extras.py
+download_westvirginia_extras.py
 Downloads the additional hazard / environment / connectivity / state datasets
-for the Tennessee data center screening pipeline that are NOT already fetched by
-download_data_al.py (national core) or download_tennessee.py (EIA/FCC/EPA brownfields).
+for the West Virginia data center screening pipeline that are NOT already fetched by
+download_data.py (national core) or download_westvirginia.py (EIA/FCC/EPA brownfields).
 
 Programmatic (downloaded here):
-  - USFWS NWI wetlands geodatabase (AL)
-  - USGS PAD-US 4.1 protected areas geodatabase (AL)
-  - NOAA Storm Events (recent years, filtered to AL)
-  - FEMA National Risk Index — county table (AL)
-  - Workforce Tennessee WARN notices (CSV feed)
+  - USFWS NWI wetlands geodatabase (WV)
+  - USGS PAD-US 4.1 protected areas geodatabase (WV)
+  - NOAA Storm Events (recent years, filtered to WV)
+  - FEMA National Risk Index — county table (WV)
+  - WorkForce West Virginia WARN notices (PDF only — see manual sources)
 
-Per-site web APIs (already wired into filter_pipeline_al.py / score_and_export_al.py,
+Per-site web APIs (already wired into filter_pipeline.py / score_and_export.py,
 nothing to pre-download):
-  - FEMA NFHL flood zones    → filter_pipeline_al.py (live ArcGIS query)
-  - USGS NSHM seismic ASCE7  → score_and_export_al.py (live query)
-  - USDA SSURGO soils        → score_and_export_al.py (live query)
+  - FEMA NFHL flood zones    → filter_pipeline.py (live ArcGIS query)
+  - USGS NSHM seismic ASCE7  → score_and_export.py (live query)
+  - USDA SSURGO soils        → score_and_export.py (live query)
 
 Manual / no free statewide bulk endpoint (printed as reminders):
-  - Tennessee statewide parcel data  (county-level / paid only)
-  - Tennessee SOS business entities  (search-only system, no clean bulk download)
-  - ADECA OWR water certificates   (eWater portal only, no bulk export)
+  - WorkForce WV WARN notices  (PDF listing only, no bulk CSV/API)
+  - WV SOS business entities   (search-only system, no clean bulk download)
+  - WVDEP water withdrawal data (ESS/interactive tool only, no bulk export)
 
-Run: python3 download_tennessee_extras.py
+Note: unlike Tennessee, West Virginia DOES have a free statewide parcel
+service (WVGIS WV_Parcels) — see fetch_parcels_wv.py, not this file.
+
+Run: python3 download_westvirginia_extras.py
 """
 
 import io
@@ -36,7 +39,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 ROOT = Path(__file__).parent
-AL   = ROOT / "data" / "tennessee" / "raw"
+AL   = ROOT / "data" / "westvirginia" / "raw"
 AL.mkdir(parents=True, exist_ok=True)
 
 HEADERS = {"User-Agent": "DataCenterScreener/1.0 arthur.b.fok@gmail.com"}
@@ -81,14 +84,14 @@ def unzip(src: Path, dest_dir: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 1. USFWS NWI Wetlands — Tennessee geodatabase
+# 1. USFWS NWI Wetlands — West Virginia geodatabase
 # ---------------------------------------------------------------------------
 def download_nwi():
-    print("\n=== 1. USFWS NWI Wetlands (AL) ===")
+    print("\n=== 1. USFWS NWI Wetlands (WV) ===")
     dest_zip = AL / "nwi" / "AL_geodatabase_wetlands.zip"
     ok = download_file(
-        "https://documentst.ecosphere.fws.gov/wetlands/data/State-Downloads/AL_geodatabase_wetlands.zip",
-        dest_zip, desc="NWI AL wetlands GDB",
+        "https://documentst.ecosphere.fws.gov/wetlands/data/State-Downloads/WV_geodatabase_wetlands.zip",
+        dest_zip, desc="NWI WV wetlands GDB",
     )
     if ok and dest_zip.exists():
         gdb = next((AL / "nwi").glob("*.gdb"), None)
@@ -97,19 +100,20 @@ def download_nwi():
 
 
 # ---------------------------------------------------------------------------
-# 2. USGS PAD-US 4.1 — Tennessee protected areas geodatabase
+# 2. USGS PAD-US 4.1 — West Virginia protected areas geodatabase
 # ---------------------------------------------------------------------------
 def download_padus():
-    print("\n=== 2. USGS PAD-US 4.1 Protected Areas (AL) ===")
+    print("\n=== 2. USGS PAD-US 4.1 Protected Areas (WV) ===")
     dest_zip = AL / "padus" / "PADUS4_1_State_AL_GDB_KMZ.zip"
-    # ScienceBase direct download token for the AL state GDB+KMZ file
-    url = "https://www.sciencebase.gov/catalog/file/get/6759abcfd34edfeb8710a004?name=PADUS4_1_State_AL_GDB_KMZ.zip"
-    ok = download_file(url, dest_zip, desc="PAD-US 4.1 AL GDB")
+    # ScienceBase item 6759abcfd34edfeb8710a004 is the shared "PAD-US 4.1 State
+    # Downloads" item — every state's file lives under it as a named attachment.
+    url = "https://www.sciencebase.gov/catalog/file/get/6759abcfd34edfeb8710a004?name=PADUS4_1_State_WV_GDB_KMZ.zip"
+    ok = download_file(url, dest_zip, desc="PAD-US 4.1 WV GDB")
     if not ok:
-        # Fallback: resolvable manager download URI
+        # Fallback: resolvable manager download URI (WV-specific file token)
         ok = download_file(
-            "https://sciencebase.usgs.gov/manager/download/cm8qkyg8p00120uphfpl821to",
-            dest_zip, desc="PAD-US 4.1 AL GDB (fallback)",
+            "https://sciencebase.usgs.gov/manager/download/cm8wlsney00140uo87ervg757",
+            dest_zip, desc="PAD-US 4.1 WV GDB (fallback)",
         )
     if ok and dest_zip.exists():
         gdb = next((AL / "padus").rglob("*.gdb"), None)
@@ -121,10 +125,10 @@ def download_padus():
 
 
 # ---------------------------------------------------------------------------
-# 3. NOAA Storm Events — recent years, filtered to Tennessee
+# 3. NOAA Storm Events — recent years, filtered to West Virginia
 # ---------------------------------------------------------------------------
 def download_noaa_storms(start_year: int = 2015, end_year: int = 2025):
-    print("\n=== 3. NOAA Storm Events (AL) ===")
+    print("\n=== 3. NOAA Storm Events (WV) ===")
     dest = AL / "noaa_storm_events.csv"
     if dest.exists() and dest.stat().st_size > 0:
         print(f"  [skip] {dest.name} already exists")
@@ -159,41 +163,41 @@ def download_noaa_storms(start_year: int = 2015, end_year: int = 2025):
             r.raise_for_status()
             with gzip.open(io.BytesIO(r.content), "rt") as gz:
                 df = pd.read_csv(gz, low_memory=False)
-            df = df[df["STATE"].astype(str).str.upper() == "TENNESSEE"]
+            df = df[df["STATE"].astype(str).str.upper() == "WEST VIRGINIA"]
             keep = [c for c in ["BEGIN_YEARMONTH", "EVENT_TYPE", "STATE",
                                 "CZ_NAME", "CZ_TYPE", "DAMAGE_PROPERTY"]
                     if c in df.columns]
             frames.append(df[keep])
-            print(f"    AL events {yr}: {len(df):,}")
+            print(f"    WV events {yr}: {len(df):,}")
         except Exception as e:
             print(f"  [WARN] {yr}: {e}")
 
     if frames:
         out = pd.concat(frames, ignore_index=True)
         out.to_csv(dest, index=False)
-        print(f"    → {dest.name}  ({len(out):,} AL events, {start_year}-{end_year})")
+        print(f"    → {dest.name}  ({len(out):,} WV events, {start_year}-{end_year})")
 
 
 # ---------------------------------------------------------------------------
-# 4. FEMA National Risk Index — Tennessee county table
+# 4. FEMA National Risk Index — West Virginia county table
 # ---------------------------------------------------------------------------
 def download_fema_nri():
-    print("\n=== 4. FEMA National Risk Index (AL counties) ===")
+    print("\n=== 4. FEMA National Risk Index (WV counties) ===")
     dest = AL / "fema_nri" / "nri_al_counties.csv"
     if dest.exists() and dest.stat().st_size > 100:
         print(f"  [skip] {dest.name} already exists")
         return
 
     # FEMA retired the hazards.fema.gov static CSV downloads (now redirect to a
-    # landing page). Pull AL counties from the official FEMA NRI ArcGIS service.
+    # landing page). Pull WV counties from the official FEMA NRI ArcGIS service.
     base = ("https://services.arcgis.com/XG15cJAlne2vxtgt/arcgis/rest/services/"
             "National_Risk_Index_Counties/FeatureServer/0/query")
-    print("  Querying FEMA NRI ArcGIS service for Tennessee …")
+    print("  Querying FEMA NRI ArcGIS service for West Virginia …")
     try:
         rows, offset = [], 0
         while True:
             r = requests.get(base, params={
-                "where": "STATEABBRV='TN'",
+                "where": "STATEABBRV='WV'",
                 "outFields": "*",
                 "returnGeometry": "false",
                 "resultOffset": offset,
@@ -211,36 +215,39 @@ def download_fema_nri():
         if rows:
             dest.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(rows).to_csv(dest, index=False)
-            print(f"    → {dest.name}  ({len(rows):,} AL county rows)")
+            print(f"    → {dest.name}  ({len(rows):,} WV county rows)")
         else:
-            print("  [WARN] NRI service returned no AL rows")
+            print("  [WARN] NRI service returned no WV rows")
     except Exception as e:
         print(f"  [WARN] NRI query failed: {e}")
 
 
 # ---------------------------------------------------------------------------
-# 5. Workforce Tennessee WARN notices (CSV feed)
+# 5. WorkForce West Virginia WARN notices
 # ---------------------------------------------------------------------------
 def download_warn():
-    print("\n=== 5. Workforce Tennessee WARN Notices ===")
+    print("\n=== 5. WorkForce West Virginia WARN Notices ===")
     dest = AL / "warn" / "al_warn.csv"
     if dest.exists() and dest.stat().st_size > 0:
         print(f"  [skip] {dest.name} already exists")
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
-    url = "https://workforce.tennessee.gov/documents/warn-list/"
-    print("  Fetching WARN CSV feed …")
+    # WorkForce WV publishes WARN notices as a periodically-updated PDF, not a
+    # CSV/API feed — this will fail to parse and fall through to the manual
+    # note below, same as every other state in this pipeline family.
+    url = "https://workforcewv.org/job-seeker/layoffs-downsizing/warn-listing/"
+    print("  Checking for a CSV WARN feed …")
     try:
         r = requests.get(url, headers=HEADERS, timeout=60)
         r.raise_for_status()
         text = r.text
-        # The feed returns CSV; sanity-check it parses
         df = pd.read_csv(io.StringIO(text))
         df.to_csv(dest, index=False)
         print(f"    → {dest.name}  ({len(df):,} WARN records)")
     except Exception as e:
-        print(f"  [WARN] WARN feed failed: {e}")
-        print("        Manual: https://workforce.tennessee.gov/warn-list/")
+        print(f"  [WARN] No machine-readable WARN feed: {e}")
+        print("        Manual (PDF listing): "
+              "https://workforcewv.org/job-seeker/layoffs-downsizing/warn-listing/")
 
 
 # ---------------------------------------------------------------------------
@@ -249,23 +256,21 @@ def download_warn():
 def print_manual_sources():
     print("\n=== Manual-only sources (no free bulk download) ===")
     print("""
-  Tennessee statewide parcel data:
-    No free statewide parcel service (TX-style TNRIS) exists. Parcels are
-    county-level, many behind paid portals. Options:
-      - Per-county GIS: https://www.tennesseegis.com/ (county-by-county)
-      - Regional aggregators (paid): id.land, Regrid
-    The pipeline already sets parcel_acres = NaN and measures via Google Earth.
+  WorkForce West Virginia WARN notices:
+    Published as a periodically-updated PDF listing, not a bulk CSV/API feed.
+      - Listing: https://workforcewv.org/job-seeker/layoffs-downsizing/warn-listing/
+    Same pattern as every other state in this pipeline — treat as manual-only,
+    not something to keep re-attempting programmatically.
 
-  Tennessee SOS business entity records:
-    Search-only system, no clean bulk download (bulk page SSL chain is broken).
-      - Entity search: https://arc-sos.state.al.us/CGI/CORPNAME.MBR/INPUT
-      - Bulk licensing: contact AL SOS / OpenCorporates
+  West Virginia SOS business entity records:
+    Search-only system, no clean bulk download.
+      - Entity search: https://apps.wv.gov/sos/businessentitysearch/
     Used only for retirement-signal verification — query per-site as needed.
 
-  ADECA OWR water-use certificates:
-    eWater portal only, no public bulk export.
-      - Portal: https://ewater.tennessee.gov/
-      - Contact: water@adeca.tennessee.gov / (334) 242-5499
+  WVDEP water withdrawal / large-quantity-user data:
+    Electronic Submission System (ESS) + interactive tool only, no bulk export.
+      - Guidance: https://dep.wv.gov/wwe/wateruse/pages/waterwithdrawal.aspx
+      - Interactive tool: https://tagis.dep.wv.gov/wwts/
     Use per-site for water-rights due diligence on top candidates.
 """)
 
@@ -275,7 +280,7 @@ def print_manual_sources():
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("=" * 60)
-    print("Tennessee — Extra Hazard / Environment / Connectivity Datasets")
+    print("West Virginia — Extra Hazard / Environment / Connectivity Datasets")
     print("=" * 60)
 
     steps = [
@@ -309,4 +314,4 @@ if __name__ == "__main__":
     else:
         print("\nAll programmatic extras downloaded.")
     print("\nNote: NFHL flood, NSHM seismic, SSURGO soils are live per-site APIs")
-    print("      already wired into filter_pipeline_al.py / score_and_export_al.py.")
+    print("      already wired into filter_pipeline.py / score_and_export.py.")

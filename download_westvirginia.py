@@ -1,19 +1,19 @@
 """
-download_tennessee.py
-Downloads Tennessee-specific datasets for detailed data center site screening.
+download_westvirginia.py
+Downloads West Virginia-specific datasets for detailed data center site screening.
 
 Datasets:
-  1. EIA Form 861 utility rates       — avg industrial $/kWh by utility in AL
-  2. HIFLD utility service territories — which utility covers each area (clip to AL)
+  1. EIA Form 861 utility rates       — avg industrial $/kWh by utility in WV
+  2. HIFLD utility service territories — which utility covers each area (clip to WV)
   3. Census Opportunity Zones          — HUD OZ designation list + Census tracts
-  4. Census county boundaries (AL)     — TIGER 2023 for spatial joins
+  4. Census county boundaries (WV)     — TIGER 2023 for spatial joins
   5. FCC broadband Form 477            — fiber presence at census block level
-  6. USGS stream gauges (AL)           — active gauge locations for water access scoring
+  6. USGS stream gauges (WV)           — active gauge locations for water access scoring
   7. EPA ACRES brownfields             — confirmed brownfield sites with assessment status
   8. EPA SEMS Superfund sites          — Superfund site assessments
   9. BLS LAUS county employment        — labor market size by county
 
-Run: python3 download_tennessee.py
+Run: python3 download_westvirginia.py
 """
 
 import io
@@ -26,7 +26,7 @@ from pathlib import Path
 from tqdm import tqdm
 
 ROOT = Path(__file__).parent
-AL   = ROOT / "data" / "tennessee" / "raw"
+AL   = ROOT / "data" / "westvirginia" / "raw"
 
 
 # ---------------------------------------------------------------------------
@@ -105,9 +105,9 @@ def arcgis_query(service_url: str, dest: Path, desc: str,
 
 
 # ---------------------------------------------------------------------------
-# 1. EIA Form 861 — Utility Rates (AL)
+# 1. EIA Form 861 — Utility Rates (WV)
 # ---------------------------------------------------------------------------
-print("\n=== 1. EIA Form 861 — Utility Rates (AL) ===")
+print("\n=== 1. EIA Form 861 — Utility Rates (WV) ===")
 
 eia861_zip = AL / "utility_territories" / "f8612022.zip"
 if not eia861_zip.exists():
@@ -133,15 +133,15 @@ if eia861_zip.exists():
             df.columns = [str(c).strip() for c in df.columns]
             state_col = next((c for c in df.columns if "STATE" in c.upper()), None)
             if state_col:
-                al_rows = df[df[state_col].astype(str).str.upper() == "TN"]
+                al_rows = df[df[state_col].astype(str).str.upper() == "WV"]
                 out.parent.mkdir(parents=True, exist_ok=True)
                 al_rows.to_csv(out, index=False)
-                print(f"    AL utility rows: {len(al_rows)} → eia861_al_sales.csv")
+                print(f"    WV utility rows: {len(al_rows)} → eia861_al_sales.csv")
 
 # ---------------------------------------------------------------------------
-# 2. EIA/HIFLD Utility Service Territories — clip to AL
+# 2. EIA/HIFLD Utility Service Territories — clip to WV
 # ---------------------------------------------------------------------------
-print("\n=== 2. Utility Service Territories (AL) ===")
+print("\n=== 2. Utility Service Territories (WV) ===")
 
 ut_dest = AL / "utility_territories" / "al_utility_territories.geojson"
 if not ut_dest.exists():
@@ -167,15 +167,16 @@ if not ut_dest.exists():
             )
             try:
                 if state_col:
-                    al_gdf = gdf[gdf[state_col].str.upper().str.strip() == "TN"]
+                    al_gdf = gdf[gdf[state_col].str.upper().str.strip() == "WV"]
                 else:
-                    al_bounds = (-88.5, 30.1, -84.9, 35.0)
+                    # WV statewide bounding box (fallback if no state column)
+                    al_bounds = (-82.7, 37.15, -77.65, 40.65)
                     al_gdf = gdf.cx[al_bounds[0]:al_bounds[2], al_bounds[1]:al_bounds[3]]
                 ut_dest.parent.mkdir(parents=True, exist_ok=True)
                 al_gdf.to_file(ut_dest, driver="GeoJSON")
-                print(f"    AL utility territories: {len(al_gdf)} → al_utility_territories.geojson")
+                print(f"    WV utility territories: {len(al_gdf)} → al_utility_territories.geojson")
             except Exception as e:
-                print(f"  [WARN] Clip to AL failed: {e}")
+                print(f"  [WARN] Clip to WV failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -195,20 +196,20 @@ if not oz_csv.exists():
         df = pd.read_excel(BytesIO(r.content), header=4)
         df.columns = ["State", "County", "geoid", "Tract_Type", "ACS_Source"]
         df["geoid"] = df["geoid"].astype(str).str.replace(".", "", regex=False).str.strip()
-        # AL Census tract GEOIDs start with "01"
-        al_oz = df[df["geoid"].str.startswith("47")]
+        # WV Census tract GEOIDs start with state FIPS "54"
+        al_oz = df[df["geoid"].str.startswith("54")]
         oz_csv.parent.mkdir(parents=True, exist_ok=True)
         al_oz.to_csv(oz_csv, index=False)
-        print(f"    → oz_designations.csv  ({len(al_oz)} AL opportunity zones)")
+        print(f"    → oz_designations.csv  ({len(al_oz)} WV opportunity zones)")
     except Exception as e:
         print(f"  [WARN] OZ download: {e}")
 
-# Census tracts for Tennessee (FIPS 01)
-al_tracts_zip = AL / "opportunity_zones" / "tl_2023_47_tract.zip"
+# Census tracts for West Virginia (FIPS 54)
+al_tracts_zip = AL / "opportunity_zones" / "tl_2023_54_tract.zip"
 download_file(
-    url="https://www2.census.gov/geo/tiger/TIGER2023/TRACT/tl_2023_47_tract.zip",
+    url="https://www2.census.gov/geo/tiger/TIGER2023/TRACT/tl_2023_54_tract.zip",
     dest=al_tracts_zip,
-    desc="AL census tracts 2023",
+    desc="WV census tracts 2023",
 )
 if al_tracts_zip.exists():
     tracts_dir = AL / "opportunity_zones" / "tracts"
@@ -217,9 +218,9 @@ if al_tracts_zip.exists():
 
 
 # ---------------------------------------------------------------------------
-# 4. Tennessee County Boundaries (Census TIGER)
+# 4. West Virginia County Boundaries (Census TIGER)
 # ---------------------------------------------------------------------------
-print("\n=== 4. Tennessee County Boundaries ===")
+print("\n=== 4. West Virginia County Boundaries ===")
 import geopandas as gpd
 
 counties_zip = AL / "census" / "tl_2023_us_county.zip"
@@ -234,21 +235,21 @@ if counties_zip.exists():
         unzip(counties_zip, counties_dir)
         counties_shp = next(counties_dir.glob("*.shp"), None)
         if counties_shp:
-            print("  Extracting and clipping to AL …")
+            print("  Extracting and clipping to WV …")
             gdf = gpd.read_file(counties_shp)
-            al_counties = gdf[gdf["STATEFP"] == "47"]
+            al_counties = gdf[gdf["STATEFP"] == "54"]
             al_counties.to_file(counties_dir / "al_counties.shp")
-            print(f"    AL counties: {len(al_counties)}")
+            print(f"    WV counties: {len(al_counties)}")
 
 
 # ---------------------------------------------------------------------------
-# 5. FCC Broadband Form 477 — AL fiber census blocks
+# 5. FCC Broadband Form 477 — WV fiber census blocks
 # ---------------------------------------------------------------------------
-print("\n=== 5. FCC Broadband (AL Fiber) ===")
+print("\n=== 5. FCC Broadband (WV Fiber) ===")
 
 fcc_dest = AL / "broadband" / "fcc_477_al_fiber.csv"
 if not fcc_dest.exists():
-    print("  Querying FCC Open Data for AL fiber providers …")
+    print("  Querying FCC Open Data for WV fiber providers …")
     try:
         rows = []
         offset = 0
@@ -259,7 +260,7 @@ if not fcc_dest.exists():
                 params={
                     "$limit": limit,
                     "$offset": offset,
-                    "$where": "stateabbr = 'TN' AND techcode = 50",
+                    "$where": "stateabbr = 'WV' AND techcode = 50",
                     "$select": "blockcode,stateabbr,techcode,maxaddown,maxadup",
                 },
                 timeout=60,
@@ -282,12 +283,12 @@ if not fcc_dest.exists():
     except Exception as e:
         print(f"  [WARN] FCC fiber query: {e}")
 
-# Census blocks for AL (FIPS 01)
-al_blocks_zip = AL / "broadband" / "tl_2020_47_tabblock20.zip"
+# Census blocks for WV (FIPS 54)
+al_blocks_zip = AL / "broadband" / "tl_2020_54_tabblock20.zip"
 download_file(
-    url="https://www2.census.gov/geo/tiger/TIGER2020/TABBLOCK20/tl_2020_47_tabblock20.zip",
+    url="https://www2.census.gov/geo/tiger/TIGER2020/TABBLOCK20/tl_2020_54_tabblock20.zip",
     dest=al_blocks_zip,
-    desc="AL census blocks 2020 (FCC join geometry)",
+    desc="WV census blocks 2020 (FCC join geometry)",
 )
 if al_blocks_zip.exists():
     blocks_dir = AL / "broadband" / "blocks"
@@ -296,19 +297,19 @@ if al_blocks_zip.exists():
 
 
 # ---------------------------------------------------------------------------
-# 6. USGS Stream Gauges — active gauges in Tennessee
+# 6. USGS Stream Gauges — active gauges in West Virginia
 # ---------------------------------------------------------------------------
-print("\n=== 6. USGS Stream Gauges (AL) ===")
+print("\n=== 6. USGS Stream Gauges (WV) ===")
 
 usgs_dest = AL / "water" / "usgs_gauges_al.csv"
 if not usgs_dest.exists():
-    print("  Querying USGS NWIS for AL active stream gauges …")
+    print("  Querying USGS NWIS for WV active stream gauges …")
     try:
         r = requests.get(
             "https://waterservices.usgs.gov/nwis/site/",
             params={
                 "format":       "rdb",
-                "stateCd":      "TN",
+                "stateCd":      "WV",
                 "siteType":     "ST",
                 "siteStatus":   "active",
                 "hasDataTypeCd": "iv,dv",
@@ -335,9 +336,9 @@ if not usgs_dest.exists():
 
 
 # ---------------------------------------------------------------------------
-# 7. EPA Confirmed Brownfield Sources (AL)
+# 7. EPA Confirmed Brownfield Sources (WV)
 # ---------------------------------------------------------------------------
-print("\n=== 7. EPA Confirmed Brownfield Sources (AL) ===")
+print("\n=== 7. EPA Confirmed Brownfield Sources (WV) ===")
 
 FIELDS = (
     "REGISTRY_ID,PRIMARY_NAME,LOCATION_ADDRESS,CITY_NAME,STATE_CODE,"
@@ -348,8 +349,8 @@ acres_dest = AL / "brownfields" / "epa_acres_al.geojson"
 arcgis_query(
     service_url="https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer/0",
     dest=acres_dest,
-    desc="EPA ACRES AL brownfields (layer 0)",
-    where="STATE_CODE='TN'",
+    desc="EPA ACRES WV brownfields (layer 0)",
+    where="STATE_CODE='WV'",
     out_fields=FIELDS,
 )
 
@@ -358,8 +359,8 @@ sems_dest = AL / "brownfields" / "epa_sems_al.geojson"
 arcgis_query(
     service_url="https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer/21",
     dest=sems_dest,
-    desc="EPA SEMS AL Superfund sites (layer 21)",
-    where="STATE_CODE='TN'",
+    desc="EPA SEMS WV Superfund sites (layer 21)",
+    where="STATE_CODE='WV'",
     out_fields=FIELDS,
 )
 
@@ -368,32 +369,33 @@ rcra_dest = AL / "brownfields" / "epa_rcra_inactive_al.geojson"
 arcgis_query(
     service_url="https://geodata.epa.gov/arcgis/rest/services/OEI/FRS_INTERESTS/MapServer/17",
     dest=rcra_dest,
-    desc="EPA RCRA Inactive AL handlers (layer 17)",
-    where="STATE_CODE='TN'",
+    desc="EPA RCRA Inactive WV handlers (layer 17)",
+    where="STATE_CODE='WV'",
     out_fields=FIELDS,
 )
 
 
 # ---------------------------------------------------------------------------
-# 8. ADEM Brownfield Database (Tennessee Dept of Environmental Management)
+# 8. WVDEP Brownfield Data (WV Dept of Environmental Protection)
 # ---------------------------------------------------------------------------
-print("\n=== 8. ADEM Brownfield Data ===")
-print("  ADEM does not publish a public brownfield GIS layer.")
-print("  Using EPA ACRES + SEMS + RCRA for Tennessee brownfield corroboration.")
-print("  For additional sites, check: https://adem.tennessee.gov/programs/land/brownfields.cnt")
+print("\n=== 8. WVDEP Brownfield Data ===")
+print("  WVDEP's Voluntary Remediation Program (VRP) does not publish a public")
+print("  brownfield GIS layer or bulk-downloadable site list.")
+print("  Using EPA ACRES + SEMS + RCRA for WV brownfield corroboration.")
+print("  For additional sites, check: https://dep.wv.gov/dlr/oer/brownfieldsection/")
 
 
 # ---------------------------------------------------------------------------
-# 9. BLS LAUS — County employment in Tennessee (via public API)
+# 9. BLS LAUS — County employment in West Virginia (via public API)
 # ---------------------------------------------------------------------------
-print("\n=== 9. BLS County Labor Market (AL, 2023) ===")
+print("\n=== 9. BLS County Labor Market (WV, 2023) ===")
 laus_dest = AL / "labor" / "bls_laus_al_2023.csv"
 if not laus_dest.exists():
-    print("  Fetching BLS LAUS county unemployment for AL …")
+    print("  Fetching BLS LAUS county unemployment for WV …")
     try:
-        # TN county FIPS: 47001–47189 (odd numbers, 95 counties)
-        tn_fips = [f"{n:03d}" for n in range(1, 190, 2)]
-        series = [f"LAUCN47{f}0000000006" for f in tn_fips]
+        # WV county FIPS: 54001–54109 (odd numbers, 55 counties)
+        tn_fips = [f"{n:03d}" for n in range(1, 110, 2)]
+        series = [f"LAUCN54{f}0000000006" for f in tn_fips]
         rows = []
         for i in range(0, len(series), 25):
             batch = series[i:i+25]
@@ -416,7 +418,7 @@ if not laus_dest.exists():
                     obs = obs or (obs_list[0] if obs_list else None)
                     if obs:
                         rows.append({
-                            "county_fips": f"47{fips}",
+                            "county_fips": f"54{fips}",
                             "year": obs["year"],
                             "employed": obs["value"],
                         })
@@ -438,7 +440,7 @@ else:
 # Summary
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("Tennessee dataset download summary")
+print("West Virginia dataset download summary")
 print("=" * 60)
 total_size = 0
 for folder in sorted(AL.iterdir()):
@@ -449,4 +451,4 @@ for folder in sorted(AL.iterdir()):
     total_size += size
     print(f"  {folder.name:<25s}  {len(files):3d} files   {size/1e6:7.1f} MB")
 print(f"  {'TOTAL':<25s}  {'':>3s}         {total_size/1e6:7.1f} MB")
-print("\nNext step: python3 build_candidates_al.py")
+print("\nNext step: python3 build_candidates.py")

@@ -1,11 +1,11 @@
 """
 enrich_candidates_al.py
-Generates a manual-verification report for filtered Tennessee candidates.
+Generates a manual-verification report for filtered West Virginia candidates.
 
 For each site produces:
   - Google Maps satellite link (visual site check)
   - EPA ECHO facility report link (permit/inspection history)
-  - TDEC facility search link (state permit status)
+  - WVDEP facility search link (state permit status)
   - EPA EnviroMapper link (regulatory overview)
 
 Output:
@@ -24,12 +24,12 @@ from urllib.parse import quote
 
 ROOT     = Path(__file__).parent
 PROC_DIR = ROOT / "data" / "processed"
-STATE    = "tn"
+STATE    = "wv"
 OUT_DIR  = ROOT / "outputs" / "csv"
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 print("=" * 60)
-print("Enrich Candidates — Tennessee Manual Verification Report")
+print("Enrich Candidates — West Virginia Manual Verification Report")
 print("=" * 60)
 
 gdf = gpd.read_file(PROC_DIR / f"candidates_filtered_{STATE}.gpkg")
@@ -90,7 +90,7 @@ for i, (_, row) in enumerate(gdf_clean.iterrows()):
         f"https://www.google.com/maps/@{lat:.6f},{lon:.6f},18z/data=!3m1!1e3"
     )
 
-    addr_query = quote(f"{name} {address} {city} TN")
+    addr_query = quote(f"{name} {address} {city} WV")
     maps_search = f"https://www.google.com/maps/search/{addr_query}"
 
     echo_url = (
@@ -103,8 +103,8 @@ for i, (_, row) in enumerate(gdf_clean.iterrows()):
         if source == "FRS" else ""
     )
 
-    # TDEC Dataviewers — permit search by facility name/location
-    adem_url = "https://dataviewers.tdec.tn.gov/dataviewers/f?p=9001:610:0::::::"
+    # WVDEP E-Permitting — permit search by facility name/location
+    adem_url = "https://dep.wv.gov/SearchDEP/Pages/E-Permitting-Application-Search.aspx"
 
     earth_url = (
         f"https://earth.google.com/web/@{lat:.6f},{lon:.6f},300a,500d,35y,0h,0t,0r"
@@ -131,7 +131,7 @@ for i, (_, row) in enumerate(gdf_clean.iterrows()):
             "1) Satellite: empty/demolished? Overgrown? Cleared pad? "
             "2) Google Earth: use polygon tool to measure parcel/site area — need ≥50 ac. "
             "3) ECHO: last inspection date, permit status. "
-            "4) TDEC Dataviewers: any active air/water permits? "
+            "4) WVDEP E-Permitting: any active air/water permits? "
             "5) Street View: fencing, no-trespass signs, derelict equipment?"
         ),
         "status":           "",
@@ -173,4 +173,4 @@ print(f"\nNext steps:")
 print(f"  1. Open outputs/csv/verification_links_{STATE}.csv")
 print(f"  2. Click each google_satellite link — 1-2 min per site")
 print(f"  3. Mark status column (CONFIRMED_VACANT / ACTIVE / NEEDS_MORE_INFO)")
-print(f"  4. python3 score_and_export_al.py")
+print(f"  4. python3 score_and_export.py")

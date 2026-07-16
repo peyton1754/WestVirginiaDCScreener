@@ -1,6 +1,6 @@
 """
 filter_pipeline_al.py
-Applies sequential spatial filters to Tennessee brownfield candidates.
+Applies sequential spatial filters to West Virginia brownfield candidates.
 
 Filters (in order):
   pre) County moratoriums / proposed bans
@@ -23,8 +23,8 @@ Note: TX-specific filters removed:
 All spatial operations in EPSG:5070 (metres). STRtree used for distance
 queries — no apply(lambda) loops.
 
-Output: data/processed/candidates_filtered_al.gpkg
-        data/processed/candidates_filtered_al.csv
+Output: data/processed/candidates_filtered_wv.gpkg
+        data/processed/candidates_filtered_wv.csv
 """
 
 import sys
@@ -46,9 +46,9 @@ warnings.filterwarnings("ignore", message="Unverified HTTPS request")
 # ---------------------------------------------------------------------------
 ROOT     = Path(__file__).parent
 RAW      = ROOT / "data" / "raw"
-AL_RAW   = ROOT / "data" / "tennessee" / "raw"
+AL_RAW   = ROOT / "data" / "westvirginia" / "raw"
 PROC_DIR = ROOT / "data" / "processed"
-STATE    = "tn"
+STATE    = "wv"
 
 CRS = "EPSG:5070"
 
@@ -168,7 +168,7 @@ def check_fema_flood(args) -> tuple[int, bool]:
 # Load candidates
 # ---------------------------------------------------------------------------
 print("=" * 60)
-print("Filter Pipeline — Tennessee Data Center Candidate Screening")
+print("Filter Pipeline — West Virginia Data Center Candidate Screening")
 print("=" * 60)
 
 cand_path = PROC_DIR / f"candidates_{STATE}.gpkg"
@@ -396,7 +396,7 @@ print_step("outside FEMA SFHA flood zones", n_before, len(gdf))
 print(f"\n[g] Within {miles(DIST_WATER_M):.0f} miles of NHD water body (≥4 ha)")
 
 nhd_parquet = RAW / "nhd" / "nhd_waterbody_all.parquet"
-nhd_shp = RAW / "nhd" / "TN" / "Shape" / "NHDWaterbody.shp"
+nhd_shp = RAW / "nhd" / "WV" / "Shape" / "NHDWaterbody.shp"
 if nhd_parquet.exists():
     nhd_all = gpd.read_parquet(nhd_parquet, columns=["geometry"])
     print(f"  Loaded NHD from parquet: {len(nhd_all):,} water bodies")
@@ -484,9 +484,9 @@ if fcc_csv.exists() and blocks_dir.exists():
         print(f"  [WARN] FCC fiber filter failed: {e} — skipping")
 else:
     if not fcc_csv.exists():
-        print("  [WARN] FCC 477 CSV not found — run download_tennessee.py")
+        print("  [WARN] FCC 477 CSV not found — run download_westvirginia.py")
     if not blocks_dir.exists():
-        print("  [WARN] Census blocks directory not found — run download_tennessee.py")
+        print("  [WARN] Census blocks directory not found — run download_westvirginia.py")
     print("  Skipping fiber filter")
 
 if not fcc_loaded:

@@ -1,6 +1,6 @@
 """
-fetch_tennessee_parcels.py
-Fetches owner and acreage data for Tennessee candidates from available sources:
+fetch_westvirginia_parcels.py
+Fetches owner and acreage data for West Virginia candidates from available sources:
 
   1. OSM industrial polygon area — Overpass API queries for landuse=industrial
      polygons near each candidate, computes area in acres from polygon geometry
@@ -8,7 +8,7 @@ Fetches owner and acreage data for Tennessee candidates from available sources:
   3. Nominatim reverse geocode — gets address details for each candidate
   4. TRI owner name — TRI facility table includes parent company names
 
-Output: updates candidates_enriched_al.gpkg with current_owner, parcel_acres, osm_acres
+Output: updates candidates_enriched_wv.gpkg with current_owner, parcel_acres, osm_acres
 
 Run after enrich_candidates_al.py and enrich_retirement_al.py, before score_and_export_al.py.
 """
@@ -28,14 +28,14 @@ warnings.filterwarnings("ignore")
 
 ROOT     = Path(__file__).parent
 PROC_DIR = ROOT / "data" / "processed"
-AL_RAW   = ROOT / "data" / "tennessee" / "raw"
+AL_RAW   = ROOT / "data" / "westvirginia" / "raw"
 FRS_DIR  = ROOT / "data" / "raw" / "frs"
-STATE    = "tn"
+STATE    = "wv"
 
 HEADERS = {"User-Agent": "DataCenterScreener/1.0 arthur.b.fok@gmail.com"}
 
 print("=" * 60)
-print("Tennessee Parcel & Ownership Lookup")
+print("West Virginia Parcel & Ownership Lookup")
 print("=" * 60)
 
 # Load candidates
@@ -52,7 +52,7 @@ print("\n" + "=" * 60)
 print("1. FRS Operator Name")
 print("=" * 60)
 
-frs_path = FRS_DIR / "AL_FACILITY_FILE.CSV"
+frs_path = FRS_DIR / "WV_FACILITY_FILE.CSV"
 if frs_path.exists():
     frs = pd.read_csv(frs_path, low_memory=False, encoding="latin-1")
     frs.columns = [c.strip().upper() for c in frs.columns]
@@ -91,7 +91,7 @@ print("  Fetching TRI facility table for parent company names …")
 try:
     offset, tri_rows = 0, []
     while True:
-        url = f"https://data.epa.gov/efservice/tri_facility/state_abbr/AL/rows/{offset}:{offset+10000}/json"
+        url = f"https://data.epa.gov/efservice/tri_facility/state_abbr/WV/rows/{offset}:{offset+10000}/json"
         r = requests.get(url, headers=HEADERS, timeout=120)
         r.raise_for_status()
         data = r.json()
@@ -154,30 +154,10 @@ print("=" * 60)
 import warnings as _w
 _w.filterwarnings("ignore")
 
-# Confirmed working county parcel services with field mappings
-COUNTY_PARCEL_SERVICES = {
-    "JEFFERSON": {
-        "url": "https://jccgis.jccal.org/server/rest/services/Basemap/Parcels/MapServer/0/query",
-        "owner_field": "OWNERNAME",
-        "acres_field": "GIS_ACRES",
-        "value_field": "AssdValue",
-        "imp_field": "PrevParcelImp",
-    },
-    "MOBILE": {
-        "url": "https://services8.arcgis.com/HND1NcQt6vgOGn1z/arcgis/rest/services/MCRC_Public_Parcels/FeatureServer/0/query",
-        "owner_field": "Name1",
-        "acres_field": "StatedArea",
-        "value_field": "",
-        "imp_field": "",
-    },
-    "TUSCALOOSA": {
-        "url": "https://services.arcgis.com/AWzSDaKZ41uuVges/arcgis/rest/services/Parcels/FeatureServer/0/query",
-        "owner_field": "pcloNAME",
-        "acres_field": "rtMAP_ACRE",
-        "value_field": "appraised",
-        "imp_field": "",
-    },
-}
+# Unlike Alabama/Tennessee, West Virginia has a single statewide parcel
+# service (WVGIS WV_Parcels — see fetch_parcels_wv.py) that already covers
+# every county, so no county-by-county fallback list is needed here.
+COUNTY_PARCEL_SERVICES = {}
 
 def query_county_parcel(url, lon, lat, owner_field, acres_field, value_field="", imp_field=""):
     out_fields = ",".join(f for f in [owner_field, acres_field, value_field, imp_field, "Shape__Area"] if f)
@@ -372,4 +352,4 @@ out_csv  = PROC_DIR / f"candidates_enriched_{STATE}.csv"
 cands.to_file(out_gpkg, driver="GPKG")
 cands.drop(columns="geometry").to_csv(out_csv, index=False)
 print(f"\nSaved: {out_gpkg}")
-print(f"Run score_and_export_al.py next.")
+print(f"Run score_and_export.py next.")

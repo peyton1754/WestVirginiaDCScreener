@@ -1,15 +1,15 @@
-# Tennessee Data Center Screener
+# West Virginia Data Center Screener
 
-Automated screening pipeline that identifies retired industrial brownfield sites in Tennessee suitable for behind-the-meter (BTM) data center development. Forked from the Alabama pipeline with Tennessee-specific data sources, county GIS endpoints, and TVA power market context.
+Automated screening pipeline that identifies retired industrial brownfield sites in West Virginia suitable for behind-the-meter (BTM) data center development. Forked from the Tennessee pipeline with West Virginia-specific data sources, a statewide parcel GIS endpoint, and Appalachian Power/Mon Power market context.
 
 The target use case is 100+ MW hyperscale data center campuses with on-site gas-fired generation, where the ideal site is a large (25+ acre) retired industrial parcel with gas pipeline access, high-voltage grid interconnection, and an established air permit framework. Sites with confirmed parcel size below 25 acres are hard-excluded; sites between 25–50 acres are flagged for adjacent land availability analysis.
 
-## Why Tennessee
+## Why West Virginia
 
-- **TVA power rates** — Tennessee Valley Authority industrial rates (~4–5 cents/kWh) are among the lowest in the US. TVA operates a formal Large Power Interconnection program for loads >5 MW.
-- **Industrial brownfield density** — Heavy chemical corridor (Eastman Chemical in Kingsport), steel and foundries in Chattanooga, paper/pulp mills in East Tennessee, auto manufacturing brownfields (Saturn/GM Spring Hill, Smyrna corridor).
-- **Growing DC market** — Nashville is a fast-growing secondary market; Oracle, Switch, and Microsoft have recent presence. Chattanooga's EPB municipal gigabit fiber is nationally unique for a secondary market.
-- **Pipeline coverage** — Tennessee Gas Pipeline (Kinder Morgan) and Columbia Gulf run through the state; Chattanooga and Kingsport have dense industrial-grade gas access.
+- **2025 behind-the-meter law** — West Virginia amended its high-impact-industrial-facility statute in 2025 to explicitly cover "high impact data centers," authorizing them to draw power from behind-the-meter generators. This is a direct, recent policy tailwind for exactly this pipeline's use case, distinct from (and more specific than) the general industrial-rate discounts other states in this family rely on.
+- **Industrial power costs** — Appalachian Power (AEP) serves southern/central WV, Mon Power and Potomac Edison (FirstEnergy) serve the north; average industrial rates run ~6.3 cents/kWh, well below the national average. AEP also offers negotiated rate reductions (~15%) for large new industrial loads (500kW+, 10+ jobs, $2.5M+ investment).
+- **Industrial brownfield density** — Steel (Weirton, Wheeling, Mingo Junction in the Northern Panhandle), heavy chemicals (Kanawha Valley/"Chemical Valley" around Charleston, South Charleston, Institute), and a long legacy of coal-adjacent industrial sites statewide.
+- **Pipeline coverage** — Mountain Valley Pipeline (42", WV/VA, began operations 2024), Columbia Gas Transmission, Equitrans Midstream, and Texas Eastern Transmission all run through the state — dense Marcellus/Utica-adjacent gas infrastructure.
 
 ## Pipeline Architecture
 
@@ -17,37 +17,42 @@ The target use case is 100+ MW hyperscale data center campuses with on-site gas-
 ┌─ DATA COLLECTION ──────────────────────────────────────────────────────────┐
 │                                                                            │
 │  download_data.py            National / multi-state datasets               │
-│    ├─ EPA FRS                 TN facility registry                         │
-│    ├─ EIA Form 860            Retired generators                           │
+│    ├─ EPA FRS                 WV facility registry                        │
+│    ├─ EIA Form 860            Retired generators                          │
 │    ├─ HIFLD Substations       In-service ≥115kV (DOE/ORNL)                │
 │    └─ HIFLD Transmission      ≥230kV lines (DOE/ORNL)                     │
 │                                                                            │
-│  download_gas_pipelines_tn.py EIA interstate/intrastate gas pipelines      │
-│    └─ TN region (~500 segments), incl. Operator + pipe type                │
+│  download_gas_pipelines_wv.py EIA interstate/intrastate gas pipelines      │
+│    └─ WV region (~2,600 segments), incl. Operator + pipe type              │
 │                                                                            │
-│  download_tennessee.py        Tennessee-specific datasets                  │
-│    ├─ EIA Form 861            TVA + co-op utility industrial rates (TN)    │
+│  download_westvirginia.py     West Virginia-specific datasets              │
+│    ├─ EIA Form 861            AEP/Mon Power industrial rates (WV)          │
 │    ├─ Census TIGER            County boundaries, tracts, census blocks     │
-│    ├─ FCC Form 477            Fiber presence at census block (TN, FIPS 47) │
+│    ├─ FCC Form 477            Fiber presence at census block (WV, FIPS 54) │
 │    ├─ EPA ACRES/SEMS          Brownfield registry + Superfund sites        │
 │    └─ BLS LAUS                County employment / labor market size        │
 │                                                                            │
-│  download_tennessee_extras.py Hazard + environment datasets                │
-│    ├─ USFWS NWI Wetlands      TN geodatabase                               │
-│    ├─ USGS PAD-US 4.1         Protected areas (TN)                         │
-│    ├─ NOAA Storm Events       TN events 2015-2025 (tornadoes, wind)        │
-│    └─ FEMA NRI                County-level composite hazard scores (TN)    │
+│  download_westvirginia_extras.py Hazard + environment datasets             │
+│    ├─ USFWS NWI Wetlands      WV geodatabase                               │
+│    ├─ USGS PAD-US 4.1         Protected areas (WV)                        │
+│    ├─ NOAA Storm Events       WV events 2015-2025 (tornadoes, wind)        │
+│    └─ FEMA NRI                County-level composite hazard scores (WV)    │
 │                                                                            │
 └────────────────────────────────────────────────────────────────────────────┘
                                     │
 ┌─ CANDIDATE BUILDING ──────────────┴────────────────────────────────────────┐
 │                                                                            │
-│  build_candidates.py         Two-pathway entry gate                        │
-│    ├─ Pathway A: EPA ACRES/SEMS registry (confirmed brownfields)           │
-│    └─ Pathway B: 2+ FRS program signals (TRI + air permit, etc.)          │
+│  build_candidates.py         Six sources                                   │
+│    ├─ EIA 860 retired        Coal, gas, oil power plants ≥50 MW            │
+│    ├─ EPA FRS                Two-pathway gate: ACRES/SEMS registry, or     │
+│    │                         2+ FRS program signals (TRI + air permit)     │
+│    ├─ EPA TRI                Closed facilities in target NAICS sectors     │
+│    ├─ OSM industrial landuse Catch-all for unmapped brownfields            │
+│    ├─ EPA Redevelopment      Brownfields >100 acres, no reported           │
+│    │  Mapper                 redevelopment (curated ACRES subset —         │
+│    │                         see EPA-540-S-26-001, Jan 2026)               │
 │    ├─ NAICS filter           Wood, paper, petroleum, chemical, minerals,   │
 │    │                         steel (NAICS 321/322/324/325/327/331)         │
-│    ├─ EIA 860 retired        Coal, gas, oil power plants ≥50 MW            │
 │    └─ Active company blocklist  Removes known operating companies          │
 │                                                                            │
 └────────────────────────────────────────────────────────────────────────────┘
@@ -79,15 +84,16 @@ The target use case is 100+ MW hyperscale data center campuses with on-site gas-
 │    ├─ ICIS-AIR permit status   Permanently Closed / operating status       │
 │    ├─ ICIS-NPDES terminations  All water permits terminated                │
 │    ├─ EPA ECHO inspection      Days since last inspection                  │
-│    ├─ WARN Act matching        Tennessee Dept of Labor notices             │
+│    ├─ WARN Act matching        WorkForce West Virginia notices (PDF-only,  │
+│    │                           manual-only source — see Data Sources)      │
 │    └─ Active operator blocklist                                            │
 │                                                                            │
-│  enrich_columns.py           Gap-fill from county GIS + federal APIs      │
-│    ├─ TN statewide parcels     Owner + acreage, ~90 rural counties         │
-│    ├─ County GIS overrides     Davidson, Rutherford (owner+acres),         │
-│    │                           Shelby (acres only — no live owner API)     │
+│  enrich_columns.py           Gap-fill from statewide GIS + federal APIs   │
+│    ├─ WV statewide parcels     Owner + acreage, all 55 counties in one     │
+│    │                           composite service (no county overrides     │
+│    │                           needed, unlike Tennessee)                   │
 │    ├─ USGS WBD                 HUC8 watershed basin per site               │
-│    └─ USDA SSURGO              Soil drainage and hydric rating             │
+│    └─ USDA SSURGO               Soil drainage and hydric rating            │
 │                                                                            │
 └────────────────────────────────────────────────────────────────────────────┘
                                     │
@@ -98,9 +104,10 @@ The target use case is 100+ MW hyperscale data center campuses with on-site gas-
 │    ├─ Hard exclude: confirmed parcel < 25 acres                            │
 │    ├─ Infrastructure score     10 dimensions, 120 pts max                  │
 │    ├─ Retirement multiplier    VERY_HIGH×1.0 → ACTIVE_WARNING×0.5         │
-│    ├─ TVA state score          14/18 pts (TVA rate advantage)              │
+│    ├─ WV state score           11/18 pts (AEP/Mon Power rate + 2025 BTM    │
+│    │                           law tailwind, smaller current DC market)    │
 │    ├─ USGS seismic             ASCE 7-22 design parameters (live API)     │
-│    ├─ USDA SSURGO              Soil type, drainage, hydric rating          │
+│    ├─ USDA SSURGO               Soil type, drainage, hydric rating          │
 │    ├─ NOAA storms              Tornado + severe wind history by county     │
 │    ├─ FEMA NRI                 18-hazard composite risk score              │
 │    └─ Watershed                HUC8 basin from USGS WBD service            │
@@ -108,44 +115,33 @@ The target use case is 100+ MW hyperscale data center campuses with on-site gas-
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Key Tennessee Markets
+## Key West Virginia Markets
 
 | Metro | Key Assets | Notable Brownfield Types |
 |-------|-----------|--------------------------|
-| **Nashville (Davidson)** | Fast-growing DC market, Oracle/Switch presence | Auto, printing, chemicals |
-| **Chattanooga (Hamilton)** | EPB gigabit fiber, TVA HQ nearby, 230kV grid | Steel, foundries, textiles |
-| **Knoxville (Knox)** | TVA nuclear corridor, UT research park | Textiles, chemicals, paper |
-| **Kingsport (Sullivan)** | Eastman Chemical corridor, dense gas pipeline access | Heavy chemicals, coal coke |
-| **Memphis (Shelby)** | Major logistics hub, Mississippi River cooling | Paper, metals, petroleum |
-| **Murfreesboro (Rutherford)** | Former Nissan/GM auto corridor | Auto manufacturing |
+| **Charleston (Kanawha)** | State capital, "Chemical Valley" corridor (Institute, South Charleston) | Heavy chemicals, plastics |
+| **Weirton/Wheeling (Hancock/Brooke/Ohio)** | Northern Panhandle steel corridor, dense PJM transmission, close to PA/OH grid | Steel, metals fabrication |
+| **Huntington (Cabell)** | Ohio River logistics, tri-state (WV/OH/KY) market | Chemicals, glass, metals |
+| **Morgantown (Monongalia)** | WVU research park, I-79 corridor, growing tech presence | Coal-adjacent industrial, chemicals |
+| **Parkersburg (Wood)** | Mid-Ohio Valley chemical corridor | Chemicals, plastics |
 
 ## County GIS Parcel Coverage
 
-Owner and acreage lookup uses the TN Comptroller's statewide parcel layer first
-(`Tennessee_Property_Boundaries_Public_Use`, ~90 of 95 counties — mostly rural
-counties on the state's own assessment system), then falls back to per-county
-overrides for the metro counties that run their own GIS instead:
+Unlike Tennessee (whose statewide parcel layer only covers ~90 of 95 counties, with several metro counties needing their own fallback endpoints), West Virginia has a single statewide composite parcel service covering all 55 counties — no county-by-county overrides are needed:
 
-| County | Metro | Coverage | GIS Source |
-|--------|-------|----------|------------|
-| *(most counties)* | — | Owner + acreage | services1.arcgis.com (statewide, YuVBSS7Y1of2Qud1) |
-| Davidson | Nashville | Owner + acreage | maps.nashville.gov/arcgis (Cadastral/Parcels) |
-| Rutherford | Murfreesboro | Owner + acreage | services5.arcgis.com (A5C0MR9xfkxVRwat) |
-| Shelby | Memphis | Acreage only | 311.memphistn.gov (Shelby's own Assessor API errors server-side) |
-| Knox | Knoxville | Unavailable | KGIS requires an authenticated login — no public REST endpoint |
-| Hamilton | Chattanooga | Unavailable | No public REST parcel endpoint (interactive viewers only) |
+| Coverage | GIS Source |
+|----------|------------|
+| All 55 counties — owner + acreage | services.wvgis.wvu.edu (WVGIS, `Planning_Cadastre/WV_Parcels`) |
 
-County GIS providers periodically move, rename, or lock down their services —
-re-verify these endpoints with a live query before relying on them if
-`current_owner` fill rates drop unexpectedly.
+Note: this service accepts envelope geometry queries only — point+distance queries return a 400 error, and requesting a `Shape__Area` outField (present on some other Esri services in this pipeline family) also errors the whole request. `fetch_parcels_wv.py`, `enrich_columns.py`, and `check_adjacent_land.py` all query it with a small lon/lat envelope for this reason. Re-verify this endpoint with a live query before relying on it if `current_owner` fill rates drop unexpectedly — GIS providers periodically move or rename services.
 
 ## Setup
 
 **Prerequisites:** Python 3.10+ and pip. No API keys or accounts are required — every data source below is free and publicly accessible.
 
 ```bash
-git clone https://github.com/Arthurfok1/TennesseeDCScreener.git
-cd TennesseeDCScreener
+git clone https://github.com/Arthurfok1/WestVirginiaDCScreener.git
+cd WestVirginiaDCScreener
 python3 -m venv venv
 source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
@@ -160,37 +156,47 @@ pip install -r requirements.txt
 Run each stage in order — later stages read the previous stage's output from `data/processed/` and `data/raw/`:
 
 ```bash
-python3 download_data.py              # National datasets
-python3 download_tennessee.py         # TN-specific datasets
-python3 download_tennessee_extras.py  # Hazard / environment datasets
-python3 download_gas_pipelines_tn.py  # EIA gas pipeline geometries (TN region)
-python3 build_candidates.py           # Build candidate pool
-python3 filter_pipeline.py            # Apply spatial filters
-python3 fetch_epa_compliance.py       # Live EPA ECHO/ICIS-AIR/ICIS-NPDES query (needs site_id)
-python3 enrich_retirement.py          # Score retirement confidence
-python3 enrich_columns.py             # Fill ownership, parcels, soil
-python3 score_and_export.py           # Score and export rankings
-python3 check_adjacent_land.py        # Adjacent land for 25-50 ac sites
+python3 download_data.py                # National datasets
+python3 download_westvirginia.py        # WV-specific datasets
+python3 download_westvirginia_extras.py # Hazard / environment datasets
+python3 download_gas_pipelines_wv.py    # EIA gas pipeline geometries (WV region)
+python3 build_candidates.py             # Build candidate pool
+python3 filter_pipeline.py              # Apply spatial filters
+python3 fetch_epa_compliance.py         # Live EPA ECHO/ICIS-AIR/ICIS-NPDES query (needs site_id)
+python3 enrich_retirement.py            # Score retirement confidence
+python3 enrich_columns.py               # Fill ownership, parcels, soil
+python3 score_and_export.py             # Score and export rankings
+python3 check_adjacent_land.py          # Adjacent land for 25-50 ac sites
 ```
 
-**Output:** the ranked candidate list lands at `outputs/csv/top_candidates_tn.csv` (and `.geojson` for mapping), with `outputs/csv/adjacent_land_25_50ac.csv` covering expansion potential for mid-size sites. Intermediate data lives in `data/raw/` (downloaded source files) and `data/processed/` (candidate pool at each pipeline stage) if you want to inspect or debug a specific step.
+**Output:** the ranked candidate list lands at `outputs/csv/top_candidates_wv.csv` (and `.geojson` for mapping), with `outputs/csv/adjacent_land_25_50ac.csv` covering expansion potential for mid-size sites. Intermediate data lives in `data/raw/` (downloaded source files) and `data/processed/` (candidate pool at each pipeline stage) if you want to inspect or debug a specific step.
 
 ## Data Sources
 
 | Dataset | Source | Notes |
 |---------|--------|-------|
-| EPA FRS | ftp.epa.gov/frs/ | Tennessee facility registry |
+| EPA FRS | ftp.epa.gov/frs/ | West Virginia facility registry |
 | EPA ECHO / ICIS-AIR / ICIS-NPDES | echodata.epa.gov/echo (echo_rest_services, air_rest_services, cwa_rest_services) | Live per-site query by FRS registry ID via `fetch_epa_compliance.py`, not a bulk download — see that script's header comment for the verified API behavior (one registry ID per request, no comma-separated batching; two-step get_facilities→get_qid flow) |
+| EPA Redevelopment Mapper | services.arcgis.com/cJ9YHowT8TU7DUyn (`Brownfield_Properties_Over_100_Acres_view`) | ACRES subset EPA curated for Superfund/Brownfield-to-data-center reuse; see `build_candidates.py`'s Source 5 |
 | EIA Form 860 | eia.gov/electricity/data/eia860/ | Retired generators |
 | HIFLD Substations | services6.arcgis.com/OO2s4OoyCZkYJ6oE | DOE/ORNL in-service ≥115kV |
-| EIA Gas Pipelines | services2.arcgis.com/FiaPA4ga0iQKduv3 (Natural_Gas_Interstate_and_Intrastate_Pipelines_1) | Interstate + intrastate, fetched via `download_gas_pipelines_tn.py` |
-| TN Statewide Parcels | services1.arcgis.com/YuVBSS7Y1of2Qud1 (Tennessee_Property_Boundaries_Public_Use) | Owner + acreage, ~90 counties |
+| EIA Gas Pipelines | services2.arcgis.com/FiaPA4ga0iQKduv3 (Natural_Gas_Interstate_and_Intrastate_Pipelines_1) | Interstate + intrastate, fetched via `download_gas_pipelines_wv.py` |
+| WV Statewide Parcels | services.wvgis.wvu.edu (Planning_Cadastre/WV_Parcels) | Owner + acreage, all 55 counties in one composite service |
 | USGS NSHM | earthquake.usgs.gov/ws/designmaps/asce7-22.json | Seismic design parameters |
 | USGS WBD | hydro.nationalmap.gov/arcgis | HUC8 watershed boundaries |
 | USDA SSURGO | SDMDataAccess.sc.egov.usda.gov | Soil drainage and hydric ratings |
 | FEMA NRI | services.arcgis.com/XG15cJAlne2vxtgt | County hazard risk index |
 | NOAA Storm Events | ncei.noaa.gov/pub/data/swdi/stormevents/ | Tornado and wind history |
-| USFWS NWI | documentst.ecosphere.fws.gov/wetlands/ | Tennessee wetlands geodatabase |
-| USGS PAD-US 4.1 | sciencebase.gov | Protected areas (TN) |
-| FCC Form 477 | fcc.gov | Fiber census blocks (TN, FIPS 47) |
+| USFWS NWI | documentst.ecosphere.fws.gov/wetlands/ | West Virginia wetlands geodatabase |
+| USGS PAD-US 4.1 | sciencebase.gov | Protected areas (WV) |
+| FCC Form 477 | fcc.gov | Fiber census blocks (WV, FIPS 54) |
 | Census TIGER 2023 | census.gov | County boundaries, urban areas, blocks |
+
+**Manual-only (no free bulk endpoint — see `download_westvirginia_extras.py`'s `print_manual_sources()`):**
+
+| Source | Why manual |
+|--------|-----------|
+| WorkForce WV WARN notices | Published as a periodically-updated PDF listing, not a CSV/API feed |
+| WV SOS business entities | Search-only system, no bulk download |
+| WVDEP water withdrawal / large-quantity-user data | ESS + interactive tool only, no bulk export |
+| WVDEP Voluntary Remediation Program site list | No public GIS layer or bulk-downloadable list; EPA ACRES/SEMS/RCRA used for corroboration instead |

@@ -1,6 +1,6 @@
 """
 score_and_export_al.py
-Scores each filtered Tennessee candidate 0–120 across seven dimensions and exports
+Scores each filtered West Virginia candidate 0–120 across seven dimensions and exports
 the top 1,000 (or all survivors if fewer) as CSV + GeoJSON.
 
 Scoring rubric (120 pts total):
@@ -15,8 +15,8 @@ Scoring rubric (120 pts total):
   Parcel acreage       5 pts  — confirmed acreage (neutral if unknown)
 
 Output:
-  outputs/csv/top_candidates_al.csv
-  outputs/geojson/top_candidates_al.geojson
+  outputs/csv/top_candidates_wv.csv
+  outputs/geojson/top_candidates_wv.geojson
 """
 
 import numpy as np
@@ -31,7 +31,7 @@ from shapely.strtree import STRtree
 # ---------------------------------------------------------------------------
 ROOT     = Path(__file__).parent
 PROC_DIR = ROOT / "data" / "processed"
-STATE    = "tn"
+STATE    = "wv"
 OUT_CSV  = ROOT / "outputs" / "csv"
 OUT_GJ   = ROOT / "outputs" / "geojson"
 OUT_CSV.mkdir(parents=True, exist_ok=True)
@@ -42,7 +42,7 @@ TOP_N          = 1000
 MIN_SCORE      = 28
 URBAN_MIN_ALAND_M2 = 200_000_000
 
-AL_RAW = ROOT / "data" / "tennessee" / "raw"
+AL_RAW = ROOT / "data" / "westvirginia" / "raw"
 
 # ---------------------------------------------------------------------------
 # Scoring tables (same as TX except STATE_SCORE)
@@ -119,6 +119,7 @@ STATE_SCORE = {
     "GA": 16,
     "NC": 14,
     "TN": 14,   # TVA power (~4-5 cents/kWh industrial), growing Nashville market, EPB Chattanooga fiber
+    "WV": 11,   # AEP/Mon Power ~6.3 cents/kWh industrial, 2025 law enabling BTM power for "high impact data centers", smaller current DC market
     "OH": 10,
     "AR":  9,
 }
@@ -232,7 +233,7 @@ def build_county_rate_map() -> dict[str, float]:
         col_name    = sales.columns[2]
         col_ind_rev = sales.columns[15]
         col_ind_mwh = sales.columns[16]
-        al_sales = sales[sales[col_state].astype(str).str.upper().str.strip() == "TN"].copy()
+        al_sales = sales[sales[col_state].astype(str).str.upper().str.strip() == "WV"].copy()
         al_sales[col_ind_rev] = pd.to_numeric(al_sales[col_ind_rev], errors="coerce")
         al_sales[col_ind_mwh] = pd.to_numeric(al_sales[col_ind_mwh], errors="coerce")
         grp = al_sales.groupby(col_name)[[col_ind_rev, col_ind_mwh]].sum()
@@ -242,7 +243,7 @@ def build_county_rate_map() -> dict[str, float]:
 
         terr = pd.read_excel(terr_path, header=0)
         terr.columns = ["year", "util_num", "util_name", "short_form", "state", "county"]
-        al_terr = terr[terr["state"].str.upper() == "TN"].copy()
+        al_terr = terr[terr["state"].str.upper() == "WV"].copy()
         al_terr["county"] = al_terr["county"].str.upper().str.strip()
         al_terr["rate"] = al_terr["util_name"].map(util_rate)
 
@@ -283,7 +284,7 @@ def score_utility_rate(county) -> float:
 # Load data
 # ---------------------------------------------------------------------------
 print("=" * 60)
-print("Score & Export — Tennessee Data Center Candidate Ranking")
+print("Score & Export — West Virginia Data Center Candidate Ranking")
 print("=" * 60)
 
 enriched_path = PROC_DIR / f"candidates_enriched_{STATE}.gpkg"
@@ -431,6 +432,10 @@ PIPE_DIAMETER = {
     "Enbridge Pipelines":      "20-36\"",
     "Southeast Supply Head":   "36\"",
     "Florida Gas Trans":       "24-36\"",
+    "Mountain Valley Pipeline": "42\"",   # confirmed mainline diameter, WV/VA
+    "Columbia Gas Transmission": "24-30\"",
+    "Texas Eastern":           "30-42\"",
+    "Equitrans":               "20-30\"",
 }
 
 gdf["pipeline_dia_est"] = ""
@@ -496,7 +501,7 @@ gen_operable = pd.read_excel(
     ROOT / "data" / "raw" / "eia860" / "3_1_Generator_Y2023.xlsx",
     sheet_name="Operable", header=1,
 )
-al_gen = gen_operable[gen_operable["State"] == "TN"]
+al_gen = gen_operable[gen_operable["State"] == "WV"]
 al_gen["Nameplate Capacity (MW)"] = pd.to_numeric(al_gen["Nameplate Capacity (MW)"], errors="coerce")
 county_gen_mw = al_gen.groupby(al_gen["County"].str.upper().str.strip())["Nameplate Capacity (MW)"].sum().to_dict()
 
@@ -505,7 +510,7 @@ plant_al = pd.read_excel(
     ROOT / "data" / "raw" / "eia860" / "2___Plant_Y2023.xlsx",
     sheet_name="Plant", header=1,
 )
-plant_al = plant_al[plant_al["State"] == "TN"]
+plant_al = plant_al[plant_al["State"] == "WV"]
 county_utility = {}
 for _, p in plant_al.iterrows():
     c = str(p.get("County", "")).upper().strip()
@@ -552,20 +557,20 @@ print("  Loading utility rate table …")
 # ---------------------------------------------------------------------------
 print("\nEnriching fiber connectivity (FCC Form 477, techcode 50) …")
 fcc_csv  = AL_RAW / "broadband" / "fcc_477_al_fiber.csv"
-blk_zip  = AL_RAW / "broadband" / "tl_2020_47_tabblock20.zip"
+blk_zip  = AL_RAW / "broadband" / "tl_2020_54_tabblock20.zip"
 blk_dir  = AL_RAW / "broadband" / "blocks"
 
-# Download FCC fiber records for TN if not cached
+# Download FCC fiber records for WV if not cached
 if not fcc_csv.exists():
     fcc_csv.parent.mkdir(parents=True, exist_ok=True)
-    print("  Downloading FCC Form 477 fiber data for TN …")
+    print("  Downloading FCC Form 477 fiber data for WV …")
     try:
         rows, offset, limit = [], 0, 50000
         while True:
             r = requests.get(
                 "https://opendata.fcc.gov/resource/jdr4-3q4p.json",
                 params={"$limit": limit, "$offset": offset,
-                        "$where": "stateabbr = 'TN' AND techcode = 50",
+                        "$where": "stateabbr = 'WV' AND techcode = 50",
                         "$select": "blockcode,maxaddown,maxadup"},
                 timeout=60,
             )
@@ -583,14 +588,14 @@ if not fcc_csv.exists():
     except Exception as e:
         print(f"  [WARN] FCC download failed: {e}")
 
-# Download TN census block shapefile if not cached
+# Download WV census block shapefile if not cached
 if not blk_zip.exists():
     blk_zip.parent.mkdir(parents=True, exist_ok=True)
     try:
         import urllib.request
-        print("  Downloading TN census blocks (TIGER 2020) …")
+        print("  Downloading WV census blocks (TIGER 2020) …")
         urllib.request.urlretrieve(
-            "https://www2.census.gov/geo/tiger/TIGER2020/TABBLOCK20/tl_2020_47_tabblock20.zip",
+            "https://www2.census.gov/geo/tiger/TIGER2020/TABBLOCK20/tl_2020_54_tabblock20.zip",
             blk_zip,
         )
         print(f"    → {blk_zip.stat().st_size / 1e6:.1f} MB")
@@ -682,16 +687,16 @@ else:
 # FEMA Flood Zone (NFIP)
 # ---------------------------------------------------------------------------
 print("\nChecking FEMA flood zone exposure …")
-fema_zip = AL_RAW / "fema_nri" / "tn_nfip_flood_zones.zip"
+fema_zip = AL_RAW / "fema_nri" / "wv_nfip_flood_zones.zip"
 
 if not fema_zip.exists():
-    print("  Downloading FEMA NFIP flood zone data for TN …")
+    print("  Downloading FEMA NFIP flood zone data for WV …")
     try:
         import urllib.request as _ur
-        # FEMA NFIP national flood hazard layer — Tennessee
+        # FEMA NFIP national flood hazard layer — West Virginia
         _ur.urlretrieve(
             "https://hazards.fema.gov/nfhl/rest/services/public/NFHL/MapServer/28/query"
-            "?where=STATE_CD%3D%27TN%27&outFields=FLD_ZONE&f=geojson&resultRecordCount=50000",
+            "?where=STATE_CD%3D%27WV%27&outFields=FLD_ZONE&f=geojson&resultRecordCount=50000",
             fema_zip,
         )
         print(f"    → {fema_zip.stat().st_size / 1e6:.1f} MB")
@@ -739,7 +744,7 @@ if eia860_zip.exists():
             with z.open("3_1_Generator_Y2023.xlsx") as f:
                 gen = pd.read_excel(f, header=1,
                                     usecols=["Plant Name", "State", "Status", "Nameplate Capacity (MW)"])
-        gen = gen[gen["State"] == "TN"].copy()
+        gen = gen[gen["State"] == "WV"].copy()
         gen["Nameplate Capacity (MW)"] = pd.to_numeric(gen["Nameplate Capacity (MW)"], errors="coerce")
         # Retired/shutdown generators: OS=out of service, RE=retired, IP=indefinitely postponed
         retired = gen[gen["Status"].isin(["OS","RE","IP"])].copy()
@@ -756,7 +761,7 @@ if eia860_zip.exists():
 
         gdf["eia860_retired"] = gdf.apply(_eia860_confidence_boost, axis=1)
         n_matched = gdf["eia860_retired"].sum()
-        print(f"  EIA-860 matched {n_matched} TN sites as retired/out-of-service generators")
+        print(f"  EIA-860 matched {n_matched} WV sites as retired/out-of-service generators")
     except Exception as e:
         print(f"  [WARN] EIA-860 cross-reference failed: {e}")
         gdf["eia860_retired"] = False
@@ -851,7 +856,7 @@ if ec_path.exists():
         ec_gdf = gpd.read_file(
             f"zip://{ec_path}!MSA_NMSA_EC_FFE_v2024_1/Shapefiles/MSA_NMSA_EC_v2024_1.shp"
         ).to_crs(CRS)
-        ec_al = ec_gdf[ec_gdf["state_name"] == "Tennessee"]
+        ec_al = ec_gdf[ec_gdf["state_name"] == "West Virginia"]
         ec_counties = set(ec_al["county_nam"].str.upper().str.strip())
         gdf["energy_community"] = gdf["County"].str.upper().str.strip().apply(
             lambda c: "Yes" if c + " COUNTY" in ec_counties or c in ec_counties else "No"
@@ -1028,7 +1033,7 @@ if storm_path.exists():
 else:
     gdf["storm_tornado_count"] = 0
     gdf["storm_wind_count"] = 0
-    print("  [skip] NOAA storm data not found — run download_tennessee_extras.py")
+    print("  [skip] NOAA storm data not found — run download_westvirginia_extras.py")
 
 # ---------------------------------------------------------------------------
 # Placeholder columns for AL sources without a direct equivalent
@@ -1161,4 +1166,4 @@ gj_cols_present = [c for c in export_cols_present if c != "rank"] + ["geometry"]
 gj_df[[c for c in gj_cols_present if c in gj_df.columns]].to_file(gj_path, driver="GeoJSON")
 print(f"  GeoJSON: {gj_path}")
 
-print(f"\nDone. {len(top)} Tennessee sites exported.")
+print(f"\nDone. {len(top)} West Virginia sites exported.")

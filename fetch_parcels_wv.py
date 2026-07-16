@@ -1,6 +1,13 @@
 """
-Fetch Tennessee parcel acreage from the official tnmap_oir statewide layer.
+Fetch West Virginia parcel acreage from the WVGIS statewide parcel layer.
 Writes parcel_acres back into the GeoPackages used by score_and_export.py.
+
+Source: West Virginia GIS Technical Center (WVGISTC) / WV State Tax and
+  Revenue Authority statewide parcel composite
+  https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer/0
+
+Unlike Tennessee/Alabama, West Virginia has a single statewide composite
+service — no county-by-county fallback needed.
 """
 import math, requests, pandas as pd, geopandas as gpd, urllib3, time
 from pathlib import Path
@@ -8,8 +15,8 @@ from pathlib import Path
 urllib3.disable_warnings()
 
 URL = (
-    "https://services1.arcgis.com/YuVBSS7Y1of2Qud1/arcgis/rest/services/"
-    "Tennessee_Property_Boundaries_Public_Use/FeatureServer/0/query"
+    "https://services.wvgis.wvu.edu/arcgis/rest/services/"
+    "Planning_Cadastre/WV_Parcels/MapServer/0/query"
 )
 H = {"User-Agent": "Mozilla/5.0"}
 
@@ -28,16 +35,16 @@ def query_parcel(lon, lat, pad=400):
                 "geometryType": "esriGeometryEnvelope",
                 "inSR": "102100",
                 "spatialRel": "esriSpatialRelIntersects",
-                "outFields": "OWNER,DEEDAC,COUNTY_NAME,ADDRESS",
+                "outFields": "FullOwnerName,Acres_C,CountyID,FullPhysicalAddress",
                 "returnGeometry": "false",
                 "f": "json"
             }, timeout=20, verify=False, headers=H)
             data = r.json()
             feats = data.get("features", [])
             if feats:
-                best = max(feats, key=lambda f: f["attributes"].get("DEEDAC") or 0)
+                best = max(feats, key=lambda f: f["attributes"].get("Acres_C") or 0)
                 attrs = best["attributes"]
-                return attrs.get("DEEDAC"), attrs.get("OWNER", "")
+                return attrs.get("Acres_C"), attrs.get("FullOwnerName", "")
         except Exception as e:
             print(f"  ERROR: {e}")
             return None, None
@@ -45,12 +52,12 @@ def query_parcel(lon, lat, pad=400):
 
 PROC_DIR = Path("data/processed")
 gpkg_paths = [
-    PROC_DIR / "candidates_enriched_tn.gpkg",
-    PROC_DIR / "candidates_filtered_tn.gpkg",
+    PROC_DIR / "candidates_enriched_wv.gpkg",
+    PROC_DIR / "candidates_filtered_wv.gpkg",
 ]
 
 # Use the enriched GeoPackage as the source of truth for coordinates
-src_path = PROC_DIR / "candidates_enriched_tn.gpkg"
+src_path = PROC_DIR / "candidates_enriched_wv.gpkg"
 gdf = gpd.read_file(src_path).to_crs("EPSG:4326")
 
 # Build a lookup: plant_id / site_id → (acres, owner)

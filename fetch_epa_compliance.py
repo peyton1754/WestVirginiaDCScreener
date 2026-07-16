@@ -48,7 +48,7 @@ import geopandas as gpd
 import requests
 
 ROOT = Path(__file__).parent
-RAW = ROOT / "data" / "tennessee" / "raw"
+RAW = ROOT / "data" / "westvirginia" / "raw"
 ECHO_DIR = RAW / "echo"
 ICIS_DIR = RAW / "icis"
 ECHO_DIR.mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,7 @@ if ECHO_DEST.exists() and AIR_DEST.exists() and NPDES_DEST.exists():
 HEADERS = {"User-Agent": "DataCenterScreener/1.0 arthur.b.fok@gmail.com"}
 BASE = "https://echodata.epa.gov/echo"
 
-src_path = ROOT / "data" / "processed" / "candidates_filtered_tn.gpkg"
+src_path = ROOT / "data" / "processed" / "candidates_filtered_wv.gpkg"
 gdf = gpd.read_file(src_path)
 
 reg_ids = sorted({

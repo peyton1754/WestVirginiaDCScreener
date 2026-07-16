@@ -16,31 +16,15 @@ warnings.filterwarnings("ignore")
 ROOT = Path(__file__).parent
 HEADERS = {"User-Agent": "DataCenterScreener/1.0"}
 
-# Statewide TN parcel layer (same as enrich_columns.py) — tried first for every
-# county. Covers ~90 of 95 counties; Davidson, Rutherford, and Shelby run their
-# own systems and need the overrides below. Knox and Hamilton have no public
-# REST parcel service left (see README's County GIS Parcel Coverage section).
+# Statewide WV parcel layer (same as enrich_columns.py) — covers all 55
+# counties in one composite service, so no county-by-county overrides are
+# needed (unlike Tennessee, which this script was originally written for).
 STATEWIDE_SVC = {
-    "url": "https://services1.arcgis.com/YuVBSS7Y1of2Qud1/arcgis/rest/services/Tennessee_Property_Boundaries_Public_Use/FeatureServer/0/query",
-    "owner": "OWNER", "acres": "DEEDAC", "landuse": None,
+    "url": "https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer/0/query",
+    "owner": "FullOwnerName", "acres": "Acres_C", "landuse": None,
 }
 
-COUNTY_OVERRIDES = {
-    "DAVIDSON": {
-        "url": "https://maps.nashville.gov/arcgis/rest/services/Cadastral/Parcels/MapServer/0/query",
-        "owner": "Owner", "acres": "DeededAcreage", "landuse": "LUDesc",
-    },
-    "RUTHERFORD": {
-        "url": "https://services5.arcgis.com/A5C0MR9xfkxVRwat/arcgis/rest/services/Parcel_Data/FeatureServer/1/query",
-        "owner": "Owner1", "acres": "TotalLandArea", "landuse": None,
-    },
-    # Shelby's own Assessor GIS errors server-side; this Memphis 311 mirror
-    # has acreage but no owner or landuse field.
-    "SHELBY": {
-        "url": "https://311.memphistn.gov/server/rest/services/311/ParcelCentroids/MapServer/1/query",
-        "owner": None, "acres": "CALC_ACRE", "landuse": None,
-    },
-}
+COUNTY_OVERRIDES = {}
 
 # Vacancy/undeveloped land use keywords (case-insensitive)
 VACANT_KEYWORDS = [
@@ -58,9 +42,9 @@ def query_adjacent(svc, lon, lat, buffer_m=600):
     out_fields = ",".join(f for f in [
         svc.get("owner"), svc.get("acres"), svc.get("landuse")
     ] if f)
-    # Convert buffer_m to approximate degree offsets (600m ≈ 0.0054 lat, 0.0067 lon at TN latitude)
+    # Convert buffer_m to approximate degree offsets (600m ≈ 0.0054 lat, 0.0070 lon at WV latitude)
     pad_lat = buffer_m / 111_000
-    pad_lon = buffer_m / (111_000 * 0.81)  # cos(36°) ≈ 0.81
+    pad_lon = buffer_m / (111_000 * 0.78)  # cos(39°) ≈ 0.78
     bbox = f"{lon-pad_lon},{lat-pad_lat},{lon+pad_lon},{lat+pad_lat}"
     try:
         r = requests.get(svc["url"], params={
@@ -155,7 +139,7 @@ def expansion_verdict(result):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
-df = pd.read_csv(ROOT / "outputs" / "csv" / "top_candidates_tn.csv")
+df = pd.read_csv(ROOT / "outputs" / "csv" / "top_candidates_wv.csv")
 df["best_acres"] = df["parcel_acres"].combine_first(df["osm_acres"])
 mid_sites = df[(df["best_acres"] >= 25) & (df["best_acres"] < 50)].copy()
 
