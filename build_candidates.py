@@ -166,6 +166,83 @@ print(f"  EIA 860 candidates: {len(eia_gdf):,} plants")
 
 
 # ---------------------------------------------------------------------------
+# Source 1b: Global Energy Monitor Coal Plant Tracker (retired/mothballed)
+# ---------------------------------------------------------------------------
+# Cross-checks EIA-860 for retired coal plants -- catches plants below
+# EIA-860's 50MW reporting floor. GEM's site-level data is gated behind an
+# email signup form (https://globalenergymonitor.org/projects/global-coal-plant-tracker/download-data/),
+# not a public API, so this reads a manually-downloaded local file rather
+# than fetching live. Verified live against the January 2026 release: 71
+# unique retired/mothballed plants across our 9 states after aggregating
+# GEM's unit-level rows by location, of which most duplicate an existing
+# EIA-860 candidate (harmless -- EIA-860 wins the dedup below since it has
+# priority and richer attributes) and 2 are genuinely below the 50MW floor.
+print("\n" + "=" * 60)
+print("Source 1b — GEM Global Coal Plant Tracker (retired/mothballed) (WV)")
+print("=" * 60)
+
+GEM_DIR = TENNESSEE / "gem"
+gem_files = sorted(GEM_DIR.glob("Global-Coal-Plant-Tracker*.xlsx")) if GEM_DIR.exists() else []
+
+gem_gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs=TARGET_CRS))
+
+if not gem_files:
+    print(f"  [skip] No GEM Coal Plant Tracker file found in {GEM_DIR}")
+    print(f"  Manual download (email signup required): "
+          f"https://globalenergymonitor.org/projects/global-coal-plant-tracker/download-data/")
+    print(f"  Place the downloaded .xlsx in {GEM_DIR}/ (any filename starting "
+          f"with 'Global-Coal-Plant-Tracker' works, so future dated re-downloads don't need code changes)")
+else:
+    try:
+        gem_raw = pd.read_excel(gem_files[-1], sheet_name="Units", header=0)
+        sub = gem_raw[
+            (gem_raw["Country/Area"] == "United States")
+            & (gem_raw["Subnational unit (province, state)"] == "West Virginia")
+            & (gem_raw["Status"].isin(["retired", "mothballed"]))
+        ].copy()
+        print(f"  {len(sub):,} retired/mothballed GEM coal units in West Virginia "
+              f"(from {gem_files[-1].name})")
+
+        if len(sub) > 0:
+            plants = sub.groupby("GEM location ID", as_index=False).agg(
+                Plant_Name=("Plant name", "first"),
+                total_mw=("Capacity (MW)", "sum"),
+                City=("Location", "first"),
+                Latitude=("Latitude", "first"),
+                Longitude=("Longitude", "first"),
+                retirement_year=("Retired year", "max"),
+                technology=("Combustion technology", "first"),
+            )
+            plants = plants.dropna(subset=["Latitude", "Longitude"])
+
+            gem_gdf = gpd.GeoDataFrame({
+                "source":         "GEM_COAL",
+                "site_id":        "GEM_" + plants["GEM location ID"].astype(str),
+                "Plant_Name":     plants["Plant_Name"],
+                "State":          "WV",
+                "County":         "",
+                "Street_Address": "",
+                "City":           plants["City"].fillna(""),
+                "Latitude":       plants["Latitude"],
+                "Longitude":      plants["Longitude"],
+                "brownfield_type": "Coal",
+                "total_mw":       plants["total_mw"],
+                "retirement_year": plants["retirement_year"],
+                "technology":     plants["technology"].fillna("Unknown"),
+                "Grid_Voltage_kV": np.nan,
+                "Natural_Gas_Pipeline_Name_1": "",
+                "Name_of_Water_Source": "",
+                "naics_code":     "",
+                "has_air_permit": False,
+                "geometry":       gpd.points_from_xy(plants["Longitude"], plants["Latitude"]),
+            }, crs="EPSG:4326").to_crs(TARGET_CRS)
+
+            print(f"  GEM coal candidates (aggregated to plant level): {len(gem_gdf):,}")
+    except Exception as _e_gem:
+        print(f"  [warn] GEM Coal Plant Tracker parse failed: {_e_gem}")
+
+
+# ---------------------------------------------------------------------------
 # Confirmed Brownfield Registry
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
@@ -874,7 +951,7 @@ print("\n" + "=" * 60)
 print("Combining all sources")
 print("=" * 60)
 
-all_frames = [df for df in [eia_gdf, redev_gdf, frs_gdf, tri_gdf, osm_gdf] if len(df) > 0]
+all_frames = [df for df in [eia_gdf, gem_gdf, redev_gdf, frs_gdf, tri_gdf, osm_gdf] if len(df) > 0]
 
 common_cols = [c for c in SCHEMA if c != "geometry"]
 for i, df in enumerate(all_frames):
@@ -894,11 +971,11 @@ print(f"  By source: {combined['source'].value_counts().to_dict()}")
 # Deduplicate by proximity (500m radius)
 # ---------------------------------------------------------------------------
 print(f"\nDeduplicating within {DEDUP_RADIUS_M}m radius …")
-print("  Priority: EIA860 > SRP Redevelopment Mapper > FRS > TRI > OSM")
+print("  Priority: EIA860 > GEM Coal Tracker > SRP Redevelopment Mapper > FRS > TRI > OSM")
 
 combined["_source_order"] = combined["source"].map(
-    {"EIA860": 0, "SRP_REDEV_MAPPER": 1, "FRS": 2, "TRI": 3, "OSM": 4}
-).fillna(5)
+    {"EIA860": 0, "GEM_COAL": 1, "SRP_REDEV_MAPPER": 2, "FRS": 3, "TRI": 4, "OSM": 5}
+).fillna(6)
 combined = combined.sort_values("_source_order").reset_index(drop=True)
 
 keep = []
