@@ -31,7 +31,7 @@ warnings.filterwarnings("ignore")
 ROOT     = Path(__file__).parent
 PROC_DIR = ROOT / "data" / "processed"
 AL_RAW   = ROOT / "data" / "westvirginia" / "raw"
-STATE    = "tn"
+STATE    = "wv"
 HEADERS  = {"User-Agent": "DataCenterScreener/1.0"}
 
 print("=" * 60)
@@ -219,6 +219,74 @@ for i in range(len(cands)):
     time.sleep(0.2)
 
 print(f"  Parcel matches (statewide + county GIS): {n_cty}")
+
+
+# ===================================================================
+# 4b. EPA Redevelopment Mapper acreage override
+#     EPA's ACRES-derived Property_Size is a professionally assessed
+#     brownfield-site boundary acreage -- more accurate than a parcel-GIS
+#     point query, which just returns whatever parcel polygon the query
+#     point happens to land in (wrong for a site spanning multiple
+#     parcels, or where the candidate's coordinate isn't dead-center on
+#     its own parcel). Overrides parcel_acres for ANY candidate within
+#     500m of an EPA Redevelopment Mapper site, regardless of which
+#     source originally built the candidate (EIA860/FRS/TRI/OSM/
+#     SRP_REDEV_MAPPER itself).
+# ===================================================================
+print("\n" + "=" * 60)
+print("4b. EPA Redevelopment Mapper acreage override")
+print("=" * 60)
+
+SRP_CACHE = AL_RAW / "srp_redev_mapper_wv.csv"
+SRP_URL = (
+    "https://services.arcgis.com/cJ9YHowT8TU7DUyn/arcgis/rest/services/"
+    "Brownfield_Properties_Over_100_Acres_view/FeatureServer/0/query"
+)
+EPA_MATCH_RADIUS_M = 500
+
+try:
+    if not SRP_CACHE.exists():
+        SRP_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        resp = requests.get(SRP_URL, params={
+            "where": "State='WV'",
+            "outFields": "*",
+            "f": "json",
+        }, timeout=30)
+        resp.raise_for_status()
+        srp = pd.DataFrame(f["attributes"] for f in resp.json().get("features", []))
+        srp.to_csv(SRP_CACHE, index=False)
+    else:
+        srp = pd.read_csv(SRP_CACHE, low_memory=False)
+
+    srp = srp.dropna(subset=["Latitude", "Longitude", "Property_Size"])
+    if len(srp) > 0:
+        srp_pts = gpd.GeoDataFrame(
+            srp, geometry=gpd.points_from_xy(srp["Longitude"], srp["Latitude"]), crs="EPSG:4326"
+        ).to_crs(cands.crs)
+
+        from shapely.strtree import STRtree
+        tree = STRtree(srp_pts.geometry.values)
+
+        n_override = 0
+        for i in range(len(cands)):
+            pt = cands.geometry.iloc[i]
+            nearby = tree.query(pt, predicate="dwithin", distance=EPA_MATCH_RADIUS_M)
+            if len(nearby) == 0:
+                continue
+            dists = [pt.distance(srp_pts.geometry.iloc[j]) for j in nearby]
+            best_j = nearby[dists.index(min(dists))]
+            epa_acres = float(srp_pts.iloc[best_j]["Property_Size"])
+            cands.at[cands.index[i], "parcel_acres"] = epa_acres
+            cands.at[cands.index[i], "cad_acres"] = str(round(epa_acres, 1))
+            cands.at[cands.index[i], "acres_source"] = "EPA_REDEV_MAPPER"
+            n_override += 1
+
+        print(f"  Overrode acreage for {n_override}/{len(cands)} candidates within "
+              f"{EPA_MATCH_RADIUS_M}m of an EPA Redevelopment Mapper site")
+    else:
+        print("  [skip] No usable EPA Redevelopment Mapper sites for this state")
+except Exception as _e_epa_acres:
+    print(f"  [warn] EPA Redevelopment Mapper acreage override failed: {_e_epa_acres}")
 
 
 # ===================================================================
