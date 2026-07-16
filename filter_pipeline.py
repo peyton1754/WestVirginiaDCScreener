@@ -653,11 +653,11 @@ else:
     print("  [skip] PAD-US geodatabase not found")
 
 # ---------------------------------------------------------------------------
-# Add placeholder columns for parcel_acres (no state parcel service for AL)
+# Add placeholder columns for parcel_acres (real value filled in later)
 # ---------------------------------------------------------------------------
 gdf["parcel_acres"] = np.nan
-print("\n[note] Parcel acreage: AL has no statewide public parcel service like TX TNRIS.")
-print("       parcel_acres set to NaN — measure via Google Earth or county GIS.")
+print("\n[note] Parcel acreage placeholder here — the real WVGIS statewide parcel")
+print("       lookup (all 55 counties) runs later, in enrich_columns.py.")
 
 # ---------------------------------------------------------------------------
 # Summary
