@@ -290,6 +290,88 @@ except Exception as _e_epa_acres:
 
 
 # ===================================================================
+# 4c. RCRA Corrective Action corroboration (metadata only, not a source)
+#     Being in EPA's RCRA Corrective Action Workload Universe means a
+#     site has documented contamination requiring cleanup -- it has NO
+#     correlation with whether the facility is retired (a refinery can
+#     run a corrective-action cleanup on one contaminated area while
+#     operating at full capacity everywhere else -- verified this
+#     directly: the raw nationwide list is dominated by active
+#     refineries/chemical plants -- Exxon Mobil, Valero, Dow, 3M, etc).
+#     So this only adds informational metadata to candidates that
+#     ALREADY independently passed this pipeline's own quality gates
+#     (FRS Pathway A/B, EIA860 retired-generator check, OSM disused
+#     flag) -- it never creates a new candidate on its own, and is not
+#     used as a retirement-confidence signal.
+# ===================================================================
+print("\n" + "=" * 60)
+print("4c. RCRA Corrective Action corroboration")
+print("=" * 60)
+
+RCRA_CA_CACHE = AL_RAW / "rcra_corrective_action_wv.csv"
+RCRA_ZIP_URL = "https://echo.epa.gov/files/echodownloads/rcra_downloads.zip"
+RCRA_MATCH_RADIUS_M = 500
+
+if "rcra_corrective_action" not in cands.columns:
+    cands["rcra_corrective_action"] = ""
+
+try:
+    if not RCRA_CA_CACHE.exists():
+        RCRA_CA_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        rcra_zip_path = AL_RAW / "rcra_downloads.zip"
+        if not rcra_zip_path.exists():
+            print("  Downloading RCRAInfo bulk data (~120MB, one-time) …")
+            _r = requests.get(RCRA_ZIP_URL, timeout=300)
+            _r.raise_for_status()
+            rcra_zip_path.write_bytes(_r.content)
+
+        import zipfile as _zf
+        with _zf.ZipFile(rcra_zip_path) as z:
+            with z.open("RCRA_EVALUATIONS.csv") as f:
+                ev = pd.read_csv(f, usecols=["ID_NUMBER", "EVALUATION_TYPE"], dtype=str, low_memory=False)
+            cac_ids = set(ev.loc[ev["EVALUATION_TYPE"].str.strip() == "CAC", "ID_NUMBER"])
+
+            with z.open("RCRA_FACILITIES.csv") as f:
+                fac = pd.read_csv(f, usecols=["ID_NUMBER", "FACILITY_NAME", "STATE_CODE",
+                                                "LATITUDE83", "LONGITUDE83"], dtype=str, low_memory=False)
+        fac = fac[fac["ID_NUMBER"].isin(cac_ids) & (fac["STATE_CODE"] == "WV")]
+        fac = fac.dropna(subset=["LATITUDE83", "LONGITUDE83"])
+        fac = fac[(fac["LATITUDE83"].str.strip() != "") & (fac["LONGITUDE83"].str.strip() != "")]
+        fac[["FACILITY_NAME", "LATITUDE83", "LONGITUDE83"]].to_csv(RCRA_CA_CACHE, index=False)
+        print(f"  Cached {len(fac):,} WV RCRA Corrective Action facilities → {RCRA_CA_CACHE.name}")
+
+    rcra_ca = pd.read_csv(RCRA_CA_CACHE, dtype=str)
+    rcra_ca["LATITUDE83"] = pd.to_numeric(rcra_ca["LATITUDE83"], errors="coerce")
+    rcra_ca["LONGITUDE83"] = pd.to_numeric(rcra_ca["LONGITUDE83"], errors="coerce")
+    rcra_ca = rcra_ca.dropna(subset=["LATITUDE83", "LONGITUDE83"])
+
+    if len(rcra_ca) > 0:
+        rcra_pts = gpd.GeoDataFrame(
+            rcra_ca, geometry=gpd.points_from_xy(rcra_ca["LONGITUDE83"], rcra_ca["LATITUDE83"]), crs="EPSG:4326"
+        ).to_crs(cands.crs)
+
+        from shapely.strtree import STRtree
+        tree = STRtree(rcra_pts.geometry.values)
+        n_match = 0
+        for i in range(len(cands)):
+            pt = cands.geometry.iloc[i]
+            nearby = tree.query(pt, predicate="dwithin", distance=RCRA_MATCH_RADIUS_M)
+            if len(nearby) == 0:
+                continue
+            dists = [pt.distance(rcra_pts.geometry.iloc[j]) for j in nearby]
+            best_j = nearby[dists.index(min(dists))]
+            cands.at[cands.index[i], "rcra_corrective_action"] = str(rcra_pts.iloc[best_j]["FACILITY_NAME"])
+            n_match += 1
+
+        print(f"  {n_match}/{len(cands)} candidates matched to a documented RCRA "
+              f"Corrective Action facility within {RCRA_MATCH_RADIUS_M}m")
+    else:
+        print("  [skip] No RCRA Corrective Action facilities found for this state")
+except Exception as _e_rcra:
+    print(f"  [warn] RCRA Corrective Action corroboration failed: {_e_rcra}")
+
+
+# ===================================================================
 # 5. soil_drainage gaps — SSURGO re-query
 # ===================================================================
 print("\n" + "=" * 60)
