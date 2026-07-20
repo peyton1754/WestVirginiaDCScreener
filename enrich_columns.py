@@ -244,6 +244,9 @@ SRP_URL = (
 )
 EPA_MATCH_RADIUS_M = 500
 
+if "acres_source" not in cands.columns:
+    cands["acres_source"] = ""
+
 try:
     if not SRP_CACHE.exists():
         SRP_CACHE.parent.mkdir(parents=True, exist_ok=True)
