@@ -4,6 +4,8 @@ Automated screening pipeline that identifies retired industrial brownfield sites
 
 The target use case is 100+ MW hyperscale data center campuses with on-site gas-fired generation, where the ideal site is a large (25+ acre) retired industrial parcel with gas pipeline access, high-voltage grid interconnection, and an established air permit framework. Sites with confirmed parcel size below 25 acres are hard-excluded; sites between 25–50 acres are flagged for adjacent land availability analysis.
 
+> Part of the [DCScreenerMap](https://github.com/Arthurfok1/DCScreenerMap) pipeline family. See [Adding a New State](https://github.com/Arthurfok1/DCScreenerMap/blob/main/docs/adding-a-new-state.md) and [Adding a New Brownfield Source](https://github.com/Arthurfok1/DCScreenerMap/blob/main/docs/adding-a-new-source.md) for extending this pipeline family.
+
 ## Why West Virginia
 
 - **2025 behind-the-meter law** — West Virginia amended its high-impact-industrial-facility statute in 2025 to explicitly cover "high impact data centers," authorizing them to draw power from behind-the-meter generators. This is a direct, recent policy tailwind for exactly this pipeline's use case, distinct from (and more specific than) the general industrial-rate discounts other states in this family rely on.
