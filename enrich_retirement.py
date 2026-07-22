@@ -503,32 +503,40 @@ for i in range(len(cands)):
     )]
 
     # Not all positive signals are equally strong evidence of retirement.
-    # STRONG signals are each independently meaningful (a specific EIA/TRI/WARN/
+    # STRONG signals are each independently meaningful (a specific EIA/WARN/
     # Superfund/ownership record directly asserting closure or transition).
-    # WEAK signals (permit lapse, inspection lapse, permit termination, ACRES
-    # enrollment, etc.) each just describe a specific permit's lifecycle or a
-    # lapse in EPA attention -- a small, fully compliant, currently ACTIVE
-    # facility can accumulate several of these on paper with no bearing on
-    # whether it's actually vacant today. Verified against Kentucky's
-    # "Precision Steel LLC" (confirmed active Harper Industries subsidiary,
-    # scored HIGH pre-fix off 3 weak signals alone) and Alabama's "Merichem
-    # Chemicals" (same pattern). Requiring at least one strong signal (or many
-    # independent weak ones) before HIGH/VERY_HIGH fixes this class of false
-    # positive.
+    # WEAK signals (permit lapse, inspection lapse, permit termination, TRI
+    # closure, ACRES enrollment, etc.) each just describe a specific permit's
+    # or registry record's lifecycle, not a live confirmation the site is
+    # vacant today. Verified against Kentucky's "Precision Steel LLC"
+    # (confirmed active, scored HIGH pre-fix off 3 weak signals alone) and
+    # Alabama's "Merichem Chemicals" (same pattern). Requiring at least one
+    # strong signal (or many independent weak ones) before HIGH/VERY_HIGH
+    # fixes this class of false positive.
     #
-    # KNOWN REMAINING GAP: this does not catch a genuinely-closed site that
-    # was later re-occupied by a new, unrelated active tenant -- e.g.
-    # Louisiana's "Fuel Solutions LLC", which scored VERY_HIGH off a real
-    # TRI_CLOSED_FLAG (an old paper mill's real, historical closure) plus 4
-    # weak signals, and stays VERY_HIGH under this fix too, because
-    # TRI_CLOSED_FLAG is genuinely strong evidence -- just stale. Catching
-    # re-occupancy needs a live current-operating-status check (e.g. a
-    # state business-registry active-status lookup) this pipeline doesn't
+    # TRI_CLOSED_FLAG was originally classified as strong, but a second
+    # verification pass found it wrong 3 of 4 times as the sole driving
+    # signal (Tennessee's "Norris Homes", Alabama's "Hood Packaging",
+    # Louisiana's "Stupp Corp" -- all confirmed currently ACTIVE despite
+    # HIGH/VERY_HIGH scores from TRI_CLOSED_FLAG alone or with only weak
+    # corroboration), versus 100% correct for EIA_RETIRED_GENERATOR and
+    # WARN_NOTICE_MATCH across every case checked. EPA's TRI "closed"
+    # indicator conflates real physical closures with facilities that
+    # simply fell below reporting thresholds or relocated, without
+    # capturing whether the site itself was later reoccupied by an
+    # unrelated tenant -- moved to WEAK accordingly.
+    #
+    # KNOWN REMAINING GAP: even as a weak signal, TRI_CLOSED_FLAG combined
+    # with enough other weak signals can still reach HIGH (e.g. Louisiana's
+    # "Fuel Solutions LLC", which has 5 weak signals total) -- this fix
+    # reduces but does not eliminate false positives driven by a genuinely
+    # stale-but-real closure record on a site that was later reoccupied.
+    # Catching that fully needs a live current-operating-status check (e.g.
+    # a state business-registry active-status lookup) this pipeline doesn't
     # have yet; that's separate follow-up work, not something a signal
-    # re-weighting can fix.
+    # re-weighting alone can fully solve.
     STRONG_SIGNALS = {
         "EIA_RETIRED_GENERATOR",
-        "TRI_CLOSED_FLAG",
         "SUPERFUND_CLEANUP_COMPLETE",
         "WARN_NOTICE_MATCH",
         "OWNERSHIP_TRANSITION",
