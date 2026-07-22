@@ -502,17 +502,56 @@ for i in range(len(cands)):
         "⚠_RECENTLY_INSPECTED",         # EPA inspected within 1 year
     )]
 
+    # Not all positive signals are equally strong evidence of retirement.
+    # STRONG signals are each independently meaningful (a specific EIA/TRI/WARN/
+    # Superfund/ownership record directly asserting closure or transition).
+    # WEAK signals (permit lapse, inspection lapse, permit termination, ACRES
+    # enrollment, etc.) each just describe a specific permit's lifecycle or a
+    # lapse in EPA attention -- a small, fully compliant, currently ACTIVE
+    # facility can accumulate several of these on paper with no bearing on
+    # whether it's actually vacant today. Verified against Kentucky's
+    # "Precision Steel LLC" (confirmed active Harper Industries subsidiary,
+    # scored HIGH pre-fix off 3 weak signals alone) and Alabama's "Merichem
+    # Chemicals" (same pattern). Requiring at least one strong signal (or many
+    # independent weak ones) before HIGH/VERY_HIGH fixes this class of false
+    # positive.
+    #
+    # KNOWN REMAINING GAP: this does not catch a genuinely-closed site that
+    # was later re-occupied by a new, unrelated active tenant -- e.g.
+    # Louisiana's "Fuel Solutions LLC", which scored VERY_HIGH off a real
+    # TRI_CLOSED_FLAG (an old paper mill's real, historical closure) plus 4
+    # weak signals, and stays VERY_HIGH under this fix too, because
+    # TRI_CLOSED_FLAG is genuinely strong evidence -- just stale. Catching
+    # re-occupancy needs a live current-operating-status check (e.g. a
+    # state business-registry active-status lookup) this pipeline doesn't
+    # have yet; that's separate follow-up work, not something a signal
+    # re-weighting can fix.
+    STRONG_SIGNALS = {
+        "EIA_RETIRED_GENERATOR",
+        "TRI_CLOSED_FLAG",
+        "SUPERFUND_CLEANUP_COMPLETE",
+        "WARN_NOTICE_MATCH",
+        "OWNERSHIP_TRANSITION",
+        "TITLE_V_DOWNGRADED",
+    }
+    n_strong = sum(1 for s in positive if s in STRONG_SIGNALS)
+    n_weak = len(positive) - n_strong
+
     if hard_exclude:
         confidence = "EXCLUDED"
     elif negative:
         confidence = "ACTIVE_WARNING"
-    elif len(positive) >= 4:
+    elif n_strong >= 2:
         confidence = "VERY_HIGH"
-    elif len(positive) >= 3:
+    elif n_strong == 1 and n_weak >= 2:
+        confidence = "VERY_HIGH"
+    elif n_strong == 1:
         confidence = "HIGH"
-    elif len(positive) >= 2:
+    elif n_weak >= 4:
+        confidence = "HIGH"
+    elif n_weak >= 2:
         confidence = "MEDIUM"
-    elif len(positive) >= 1:
+    elif n_weak >= 1:
         confidence = "LOW"
     else:
         confidence = "UNVERIFIED"
