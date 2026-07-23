@@ -6,6 +6,8 @@ The target use case is 100+ MW hyperscale data center campuses with on-site gas-
 
 > Part of the [DCScreenerMap](https://github.com/Arthurfok1/DCScreenerMap) pipeline family. See [Adding a New State](https://github.com/Arthurfok1/DCScreenerMap/blob/main/docs/adding-a-new-state.md) and [Adding a New Brownfield Source](https://github.com/Arthurfok1/DCScreenerMap/blob/main/docs/adding-a-new-source.md) for extending this pipeline family.
 
+> **Data quality warning:** Output from this pipeline still has a meaningfully high chance of errors — misclassified sites, stale or incorrect retirement status, and silent degradation from dead source endpoints (see "Known gaps" in this README and in the DCScreenerMap README). Treat `top_candidates_*` as a screened shortlist, not a verified answer: manually check retirement status, ownership, parcel size, and site details for any candidate before acting on it.
+
 ## Why West Virginia
 
 - **2025 behind-the-meter law** — West Virginia amended its high-impact-industrial-facility statute in 2025 to explicitly cover "high impact data centers," authorizing them to draw power from behind-the-meter generators. This is a direct, recent policy tailwind for exactly this pipeline's use case, distinct from (and more specific than) the general industrial-rate discounts other states in this family rely on.
