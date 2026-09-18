@@ -1,0 +1,90 @@
+name: Refresh screening data
+
+# Re-runs the full WV screening pipeline against fresh upstream downloads
+# and commits any changed outputs/. Documented run order from README.md
+# ("Running the Pipeline"). Scheduled monthly; can also be run on demand
+# from the Actions tab via workflow_dispatch.
+#
+# NOTE: schedule triggers only fire on the default branch, so this
+# activates once merged. The first run should be watched via a manual
+# workflow_dispatch — the pipeline downloads ~1-2 GB of federal data and
+# has only ever been run on a developer machine before this.
+
+on:
+  schedule:
+    - cron: '17 6 1 * *' # 06:17 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download source datasets
+        run: |
+          python3 download_data.py
+          python3 download_westvirginia.py
+          python3 download_westvirginia_extras.py
+          python3 download_gas_pipelines_wv.py
+
+      - name: Build, filter, enrich, score
+        run: |
+          python3 build_candidates.py
+          python3 filter_pipeline.py
+          python3 fetch_epa_compliance.py
+          python3 enrich_retirement.py
+          python3 enrich_columns.py
+          python3 score_and_export.py
+          python3 check_adjacent_land.py
+
+      - name: Commit refreshed outputs
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add outputs/
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Outputs unchanged; nothing to commit."
+          else
+            git commit -m "Refresh WV screening outputs (scheduled pipeline run)"
+            git push
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Optional cross-repo hook: lets DCScreenerMap re-merge WV as soon as
+      # new outputs land, instead of waiting for its own monthly schedule.
+      # Requires a repo secret DCSCREENERMAP_DISPATCH_TOKEN (fine-grained PAT
+      # with contents:write on peyton1754/DCScreenerMap). Silently skipped
+      # when the secret is not configured.
+      - name: Notify DCScreenerMap
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          TOKEN: ${{ secrets.DCSCREENERMAP_DISPATCH_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "DCSCREENERMAP_DISPATCH_TOKEN not set; skipping dispatch."
+            exit 0
+          fi
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/peyton1754/DCScreenerMap/dispatches \
+            -d '{"event_type":"wv-data-updated"}'
