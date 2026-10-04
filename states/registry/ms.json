@@ -1,0 +1,21 @@
+{
+  "abbr": "MS",
+  "bbox": [
+    -91.65,
+    30.17,
+    -88.1,
+    35.0
+  ],
+  "fips": null,
+  "name": "Mississippi",
+  "nhd_name": null,
+  "notes": {
+    "gaps": {
+      "fips": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it.",
+      "nhd_name": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it."
+    },
+    "parcels": "No statewide parcel service identified yet."
+  },
+  "parcels": null,
+  "state_score": null
+}

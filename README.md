@@ -15,6 +15,80 @@ The target use case is 100+ MW hyperscale data center campuses with on-site gas-
 - **Industrial brownfield density** — Steel (Weirton, Wheeling, Mingo Junction in the Northern Panhandle), heavy chemicals (Kanawha Valley/"Chemical Valley" around Charleston, South Charleston, Institute), and a long legacy of coal-adjacent industrial sites statewide.
 - **Pipeline coverage** — Mountain Valley Pipeline (42", WV/VA, began operations 2024), Columbia Gas Transmission, Equitrans Midstream, and Texas Eastern Transmission all run through the state — dense Marcellus/Utica-adjacent gas infrastructure.
 
+## Multi-state: states are configuration, not forks
+
+This pipeline was already written to handle many states and then configured for
+exactly one. `download_data.py` holds `STATES = ["WV"]` as a list beside a
+`STATE_NAMES` map; `build_candidates.py` derives its slug from a `TARGET_STATES`
+set; `score_and_export.py` scores eight states; `check_adjacent_land.py` carries
+an empty `COUNTY_OVERRIDES` and a comment saying it was originally written for
+Tennessee. The machinery is multi-state. Only the configuration was single-state,
+scattered across eight module-level constants in seven files.
+
+The DCScreener family's answer to a new state was to fork the whole repo. Nine of
+those forks exist, all now unreachable, each carrying its own copy of the same
+~6,400 lines, and each with an extractor pointing at a path on one developer's
+machine. Forking is what let them rot independently. `states/` is the
+alternative: one pipeline, states as data.
+
+```
+states/
+  schema.py            the contract: what a state needs, what it can do without
+  registry/<st>.json   one file per state
+  __main__.py          python3 -m states   readiness report
+tests/test_states.py   schema, readiness, and the pin-down against live literals
+```
+
+### What a state actually needs
+
+Most of this pipeline reads NATIONAL datasets and filters by state: EIA-860,
+EPA FRS and TRI, HIFLD substations and transmission, Census TIGER, FEMA NRI.
+Those need only a FIPS code, a name and a bounding box.
+
+Only ONE source is genuinely per state and actually fetched: the statewide parcel
+service. The other state-specific URLs here (`dep.wv.gov`, `apps.wv.gov`,
+`workforcewv.org`, `tagis.dep.wv.gov`) appear solely inside print statements
+telling a human where to look; nothing downloads them. So a state with no known
+parcel service is still worth screening. It is reported `partial` and loses the
+parcel-acreage enrichment and the adjacent-land step, by name, rather than
+failing at step 11 of 11.
+
+| Readiness | Meaning |
+|---|---|
+| `full` | every required field, plus a parcel service |
+| `partial` | runnable; no parcel service, so two steps are skipped |
+| `declared` | named, not yet runnable; the report lists each unfilled field |
+
+### Adding a state
+
+Run `python3 -m states` and it tells you exactly what is missing. Today every
+declared state needs the same one or two lookups:
+
+1. **`fips`** — the two-digit state code, as a **string** (leading zeros are
+   significant; Alabama is `"01"`, not `1`).
+2. **`state_score`** — the market score, a judgment call, not a lookup. Five of
+   the nine already have one inherited from `STATE_SCORE`.
+
+`nhd_name` is filled by rule (`name.replace(' ', '_')`), validated against WV,
+and labelled `derived` so it never reads as looked up. It is cheap to be wrong
+about: the NHD URL either resolves on the first download or 404s immediately.
+
+**Never fill a field from memory.** A plausible wrong FIPS screens the wrong
+state's facilities and every downstream number inherits it silently. A `null`
+that the readiness report names is strictly better.
+
+### Why the pin-down test matters
+
+The registry was extracted from constants that still live in the pipeline
+scripts, so until every consumer is rewired those values exist twice.
+`test_wv_registry_pins_the_live_literals` reads both sides and fails if either
+drifts. That is what makes the consumers safe to migrate one at a time rather
+than in one unverifiable change.
+
+> **Repo name:** this repo screens West Virginia today and is built to screen
+> more. If a second state goes live the name is worth revisiting, which is a
+> decision for the owner, not a rename to do in passing.
+
 ## Pipeline Architecture
 
 ```

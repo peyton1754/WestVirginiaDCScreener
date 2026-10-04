@@ -1,0 +1,32 @@
+{
+  "abbr": "WV",
+  "bbox": [
+    -82.6447,
+    37.2015,
+    -77.719,
+    40.6388
+  ],
+  "fips": "54",
+  "name": "West Virginia",
+  "nhd_name": "West_Virginia",
+  "notes": {
+    "manual_sources": {
+      "brownfields": "https://dep.wv.gov/dlr/oer/brownfieldsection/",
+      "entity_search": "https://apps.wv.gov/sos/businessentitysearch/",
+      "warn_notices": "https://workforcewv.org/job-seeker/layoffs-downsizing/warn-listing/",
+      "water_withdrawal": "https://tagis.dep.wv.gov/wwts/"
+    },
+    "market": "Appalachian Power (AEP) south and central, Mon Power and Potomac Edison (FirstEnergy) north; ~6.3 cents/kWh average industrial. 2025 amendment to the high-impact-industrial-facility statute explicitly covers high impact data centers and authorizes behind-the-meter generation.",
+    "parcels": "One statewide composite service covers all 55 counties, so no county overrides are needed."
+  },
+  "parcels": {
+    "county_overrides": {},
+    "statewide_service": {
+      "acres": "Acres_C",
+      "landuse": null,
+      "owner": "FullOwnerName",
+      "url": "https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer/0/query"
+    }
+  },
+  "state_score": 11
+}
