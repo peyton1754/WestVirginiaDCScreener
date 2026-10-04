@@ -1,0 +1,21 @@
+{
+  "abbr": "AR",
+  "bbox": [
+    -94.6162,
+    33.0021,
+    -89.7308,
+    36.5019
+  ],
+  "fips": null,
+  "name": "Arkansas",
+  "nhd_name": null,
+  "notes": {
+    "gaps": {
+      "fips": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it.",
+      "nhd_name": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it."
+    },
+    "parcels": "No statewide parcel service identified yet."
+  },
+  "parcels": null,
+  "state_score": 9
+}
