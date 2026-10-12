@@ -1,0 +1,21 @@
+{
+  "abbr": "AL",
+  "bbox": [
+    -88.47,
+    30.14,
+    -84.89,
+    35.01
+  ],
+  "fips": null,
+  "name": "Alabama",
+  "nhd_name": null,
+  "notes": {
+    "gaps": {
+      "fips": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it.",
+      "nhd_name": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it."
+    },
+    "parcels": "No statewide parcel service identified yet."
+  },
+  "parcels": null,
+  "state_score": null
+}

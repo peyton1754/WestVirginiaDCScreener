@@ -1,0 +1,21 @@
+{
+  "abbr": "VA",
+  "bbox": [
+    -83.68,
+    36.54,
+    -75.17,
+    39.47
+  ],
+  "fips": null,
+  "name": "Virginia",
+  "nhd_name": null,
+  "notes": {
+    "gaps": {
+      "fips": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it.",
+      "nhd_name": "not looked up yet. Leave null rather than guessing: a wrong value screens the wrong state and every downstream number inherits it."
+    },
+    "parcels": "No statewide parcel service identified yet."
+  },
+  "parcels": null,
+  "state_score": 20
+}

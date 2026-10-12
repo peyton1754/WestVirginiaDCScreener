@@ -1,0 +1,51 @@
+name: Tests
+
+# Runs tests/ on every push and pull request.
+#
+# WHY THIS IS SEPARATE from refresh-data.yml: that workflow only fires on a
+# monthly cron and manual dispatch, and it downloads 1 to 2 GB of federal data
+# before it does anything. Neither property suits a pull request. Without this
+# file a PR that broke the state registry would reach main with nothing having
+# run.
+#
+# This job installs two packages and runs a suite that takes under a second. It
+# downloads no source data and touches no network beyond pip, so it is cheap
+# enough to run on every push.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      # Deliberately NOT requirements.txt: that pulls geopandas, GDAL and the
+      # rest of the geospatial stack, none of which the registry tests touch.
+      - name: Install test dependencies
+        run: pip install pytest
+
+      - name: Run tests
+        run: python3 -m pytest tests/ -q
+
+      # The readiness report must stay runnable and the registry parseable. This
+      # is the check that catches a malformed state file, which the suite also
+      # covers but which is worth failing loudly and early on its own.
+      - name: State registry readiness report
+        run: python3 -m states
