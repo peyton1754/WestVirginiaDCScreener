@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 from pathlib import Path
+from states import resolve
 
 warnings.filterwarnings("ignore")
 
@@ -152,10 +153,12 @@ print("=" * 60)
 # county-specific fallback endpoints), West Virginia's WVGIS statewide parcel
 # layer is a single composite covering all 55 counties — see fetch_parcels_wv.py
 # for how it was verified. No county-by-county fallback list is needed here.
-STATEWIDE_SVC = {
-    "url": "https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer/0/query",
-    "owner": "FullOwnerName", "acres": "Acres_C",
-}
+# One source for this, shared with check_adjacent_land.py. The two
+# literals this replaces had already diverged: this copy was missing
+# the "landuse" key. Nothing here reads landuse, so the extra key is
+# inert, but the second copy is what produced the divergence.
+STATEWIDE_SVC = resolve.statewide_service(
+    resolve.single_selected("enrich_columns.py"))
 
 COUNTY_SERVICES = {}
 

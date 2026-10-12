@@ -10,6 +10,7 @@ import requests
 import warnings
 import pandas as pd
 from pathlib import Path
+from states import resolve
 
 warnings.filterwarnings("ignore")
 
@@ -19,12 +20,10 @@ HEADERS = {"User-Agent": "DataCenterScreener/1.0"}
 # Statewide WV parcel layer (same as enrich_columns.py) — covers all 55
 # counties in one composite service, so no county-by-county overrides are
 # needed (unlike Tennessee, which this script was originally written for).
-STATEWIDE_SVC = {
-    "url": "https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer/0/query",
-    "owner": "FullOwnerName", "acres": "Acres_C", "landuse": None,
-}
+_STATE = resolve.single_selected("check_adjacent_land.py")
+STATEWIDE_SVC = resolve.statewide_service(_STATE)
 
-COUNTY_OVERRIDES = {}
+COUNTY_OVERRIDES = resolve.county_overrides(_STATE)
 
 # Vacancy/undeveloped land use keywords (case-insensitive)
 VACANT_KEYWORDS = [

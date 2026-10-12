@@ -24,6 +24,7 @@ import numpy as np
 from pathlib import Path
 from shapely.geometry import Point
 from shapely.strtree import STRtree
+from states import resolve
 
 # ---------------------------------------------------------------------------
 # Config
@@ -38,7 +39,7 @@ BF_DIR     = TENNESSEE / "brownfields"
 PROC_DIR   = ROOT / "data" / "processed"
 PROC_DIR.mkdir(exist_ok=True)
 
-TARGET_STATES = ["WV"]
+TARGET_STATES = resolve.selected()
 STATE         = "_".join(sorted(TARGET_STATES)).lower()
 MIN_MW        = 50
 TARGET_CRS    = "EPSG:5070"

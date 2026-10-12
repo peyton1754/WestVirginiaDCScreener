@@ -18,12 +18,18 @@ The target use case is 100+ MW hyperscale data center campuses with on-site gas-
 ## Multi-state: states are configuration, not forks
 
 This pipeline was already written to handle many states and then configured for
-exactly one. `download_data.py` holds `STATES = ["WV"]` as a list beside a
+exactly one. `download_data.py` held `STATES = ["WV"]` as a list beside a
 `STATE_NAMES` map; `build_candidates.py` derives its slug from a `TARGET_STATES`
-set; `score_and_export.py` scores eight states; `check_adjacent_land.py` carries
+set; `score_and_export.py` scores eight states; `check_adjacent_land.py` carried
 an empty `COUNTY_OVERRIDES` and a comment saying it was originally written for
 Tennessee. The machinery is multi-state. Only the configuration was single-state,
 scattered across eight module-level constants in seven files.
+
+Four of those eight now read the registry instead of carrying their own copy:
+`STATES`, `STATE_NAMES`, `TARGET_STATES`, and the `STATEWIDE_SVC` /
+`COUNTY_OVERRIDES` pair. Two are deliberately left as literals, each with a
+reason and a test that fails if it drifts from the registry; see **What is not
+wired, and why** below.
 
 The DCScreener family's answer to a new state was to fork the whole repo. Nine of
 those forks exist, all now unreachable, each carrying its own copy of the same
@@ -34,9 +40,11 @@ alternative: one pipeline, states as data.
 ```
 states/
   schema.py            the contract: what a state needs, what it can do without
+  resolve.py           what the pipeline scripts call: one value for THIS run
   registry/<st>.json   one file per state
   __main__.py          python3 -m states   readiness report
-tests/test_states.py   schema, readiness, and the pin-down against live literals
+tests/test_states.py   schema, readiness, and the pin-down on what is still a literal
+tests/test_resolve.py  the resolvers, and that each reproduces the value it replaced
 ```
 
 ### What a state actually needs
@@ -77,13 +85,55 @@ about: the NHD URL either resolves on the first download or 404s immediately.
 state's facilities and every downstream number inherits it silently. A `null`
 that the readiness report names is strictly better.
 
-### Why the pin-down test matters
+### Choosing which state to screen
 
-The registry was extracted from constants that still live in the pipeline
-scripts, so until every consumer is rewired those values exist twice.
+Set `SCREENER_STATES` before running the pipeline. It takes one or more
+two-letter codes, comma or space separated:
+
+```bash
+SCREENER_STATES=WV python3 download_data.py     # the default; same as unset
+SCREENER_STATES=TN python3 download_data.py     # refused: TN has no FIPS yet
+```
+
+**With nothing set it screens West Virginia**, which is exactly what the
+pipeline did before the registry existed. That is deliberate: this migration is
+not allowed to change any output, and `tests/test_resolve.py` asserts per
+constant that it does not.
+
+A state that is only `declared` is refused at startup, with every unfilled field
+listed. The alternative is a 1 to 2 GB download that then filters the wrong
+state, which is a far more expensive way to learn the same thing.
+
+Two scripts refuse a multi-state selection outright: `check_adjacent_land.py`
+and `enrich_columns.py` hold their parcel service in a module-level constant, so
+they can carry one state however many are selected, and in a multi-state run
+they would query the first state's parcel layer for every site. That limitation
+predates the registry; what changed is that it now fails at startup and names
+the script to rewire, instead of writing plausible wrong owners and acreages.
+
+### What is not wired, and why
+
+| Constant | Why it stays a literal | How it is guarded |
+|---|---|---|
+| `score_and_export.STATE_SCORE` | Carries GA, NC and OH, which are not on the combined map and have no registry entry. The consumer is `.map(STATE_SCORE).fillna(0)`, so dropping a score would silently zero that state's axis rather than fail | `test_wv_registry_pins_the_live_literals` and `test_state_score_is_not_migrated_and_keeps_its_unmapped_states` |
+| `download_gas_pipelines_wv.BBOX` | The registry bbox padded by roughly 40 miles, but applied by hand to a rounded bbox and uneven on every edge (offsets 0.7555, 0.7015, 0.8190, 0.6612 degrees). No formula reproduces it, so recomputing it would change which pipelines are downloaded, and a refactor that alters downloaded data is not a refactor | `test_gas_bbox_still_contains_the_registry_bbox`, which asserts the envelope still covers the whole state with margin |
+
+### Why the pin-down tests matter
+
+The registry was extracted from constants that lived in the pipeline scripts, so
+while a consumer is unmigrated its value exists twice.
 `test_wv_registry_pins_the_live_literals` reads both sides and fails if either
-drifts. That is what makes the consumers safe to migrate one at a time rather
-than in one unverifiable change.
+drifts. Once a constant IS migrated its literal is gone and nothing can read it,
+so the pin moves to `tests/test_resolve.py:PRE_MIGRATION`, which records each
+pre-migration value with the file and commit it was measured at and asserts the
+resolver still reproduces it. Together they are what make the consumers safe to
+migrate one at a time rather than in one unverifiable change.
+
+**These four scripts have never been run end to end here.** The tests evaluate
+each rewired expression in isolation, lifted from the source with `ast`, because
+`download_data.py` starts downloading at import and the others pull in geopandas.
+That proves the wiring produces the right value; it does not prove the rest of
+the script. The first supervised full run is still owed.
 
 > **Repo name:** this repo screens West Virginia today and is built to screen
 > more. If a second state goes live the name is worth revisiting, which is a
@@ -227,7 +277,11 @@ pip install -r requirements.txt
 
 `geopandas` pulls in GDAL/GEOS/PROJ binaries via `pyogrio` — on Linux you may need `apt install libgdal-dev` (or your distro's equivalent) first if the wheel install fails; macOS and Windows wheels bundle these already.
 
-**Disk space & runtime:** the download stage pulls ~1–2 GB (national HIFLD transmission lines, NHD water bodies, NWI wetlands, Census TIGER blocks are the largest files) and takes roughly 15–30 minutes depending on connection speed — most scripts skip re-downloading files that already exist, so re-runs after the first are much faster. The rest of the pipeline (candidate building through scoring) typically finishes in a few minutes.
+**Disk space & runtime:** the download-stage figure below is UNVERIFIED and is
+known to be too low: NHD West Virginia alone measured 1.5 GB on disk on
+2026-10-04, against the 1 to 2 GB claimed here for every source combined. The
+real total is being measured on the first supervised run rather than replaced
+with another guess. As originally written: the download stage pulls ~1–2 GB (national HIFLD transmission lines, NHD water bodies, NWI wetlands, Census TIGER blocks are the largest files) and takes roughly 15–30 minutes depending on connection speed — most scripts skip re-downloading files that already exist, so re-runs after the first are much faster. The rest of the pipeline (candidate building through scoring) typically finishes in a few minutes.
 
 ## Running the Pipeline
 
