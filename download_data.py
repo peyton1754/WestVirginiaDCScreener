@@ -25,6 +25,7 @@ import zipfile
 import requests
 from pathlib import Path
 from tqdm import tqdm
+from states import resolve
 
 ROOT = Path(__file__).parent
 RAW = ROOT / "data" / "raw"
@@ -37,12 +38,13 @@ NHD_DIR    = RAW / "nhd"
 FRS_DIR    = RAW / "frs"
 OSM_DIR    = RAW / "osm"
 
-STATES = ["WV"]
+# Which states this run screens. Default is WV, so a run that does not
+# set SCREENER_STATES is identical to the pre-registry pipeline.
+STATES = resolve.selected()
 
-STATE_NAMES = {
-    # NHD's S3 filenames use an underscore, not a space, between words
-    "WV": "West_Virginia",
-}
+# NHD filename form per state, for NHD_H_{name}_State_Shape.zip. NHD's S3
+# filenames use an underscore, not a space, between words.
+STATE_NAMES = resolve.state_names(STATES)
 
 # ---------------------------------------------------------------------------
 # Helpers (same as download_data.py)

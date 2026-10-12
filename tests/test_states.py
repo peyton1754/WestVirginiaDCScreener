@@ -159,18 +159,22 @@ def test_load_rejects_an_unknown_state():
 # --- the pin-down: registry must equal the literals still in the scripts ----
 
 def test_wv_registry_pins_the_live_literals():
-    """Until every consumer reads the registry, these values exist twice. This
-    fails the moment either copy changes, which is what makes the migration
-    safe to do one script at a time."""
+    """Pins the registry against the literals that are STILL in the scripts.
+
+    Four of the five constants this test originally covered have since been
+    migrated: `STATE_NAMES`, `STATEWIDE_SVC` and `COUNTY_OVERRIDES` are now
+    calls into `states.resolve`, so there is no second copy left to compare
+    against and nothing here can read them. Their pre-migration values are
+    recorded once in `tests/test_resolve.py:PRE_MIGRATION`, which asserts that
+    every resolver still reproduces them for West Virginia. That file is where
+    the pin lives now.
+
+    `STATE_SCORE` is deliberately not migrated, because it carries GA, NC and
+    OH, which are not on the combined map and have no registry entry. So it is
+    still two copies and still belongs here.
+    """
     wv = schema.load('WV')
-
-    assert wv['nhd_name'] == module_literal('download_data.py', 'STATE_NAMES')['WV']
     assert wv['state_score'] == module_literal('score_and_export.py', 'STATE_SCORE')['WV']
-
-    svc = module_literal('check_adjacent_land.py', 'STATEWIDE_SVC')
-    assert wv['parcels']['statewide_service'] == svc
-    assert wv['parcels']['county_overrides'] == module_literal(
-        'check_adjacent_land.py', 'COUNTY_OVERRIDES')
 
 
 def test_every_sourced_state_score_reaches_the_registry():
@@ -197,8 +201,16 @@ def test_registry_covers_every_state_on_the_combined_map():
 def test_nhd_derivation_reproduces_wv():
     """The positive control for the rule. WV is the only state whose NHD
     filename form is known from this repo's own source, so if the rule stops
-    reproducing it the rule is wrong for everyone."""
-    known = module_literal('download_data.py', 'STATE_NAMES')['WV']
+    reproducing it the rule is wrong for everyone.
+
+    The source used to be `download_data.STATE_NAMES`, which has since been
+    migrated to the registry. Asserting against the registry would be circular,
+    since the registry value was extracted from that same literal. So the
+    control reads the pre-migration value recorded in `test_resolve.py`, which
+    carries its provenance and the commit it was measured at.
+    """
+    from test_resolve import PRE_MIGRATION
+    known = PRE_MIGRATION['STATE_NAMES']['WV']
     assert schema.derive_nhd_name('West Virginia') == known == 'West_Virginia'
 
 
