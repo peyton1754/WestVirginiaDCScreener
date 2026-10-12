@@ -17,7 +17,10 @@
       "water_withdrawal": "https://tagis.dep.wv.gov/wwts/"
     },
     "market": "Appalachian Power (AEP) south and central, Mon Power and Potomac Edison (FirstEnergy) north; ~6.3 cents/kWh average industrial. 2025 amendment to the high-impact-industrial-facility statute explicitly covers high impact data centers and authorizes behind-the-meter generation.",
-    "parcels": "One statewide composite service covers all 55 counties, so no county overrides are needed."
+    "parcels": "One statewide composite service covers all 55 counties, so no county overrides are needed.",
+    "sources": {
+      "fips": "This repo's own literals: download_westvirginia.py lines 199, 200 and 240 carry \"54\", including gdf[\"STATEFP\"] == \"54\". Extracted, never retyped."
+    }
   },
   "parcels": {
     "county_overrides": {},

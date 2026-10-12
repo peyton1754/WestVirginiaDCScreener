@@ -11,6 +11,7 @@ import warnings
 import pandas as pd
 from pathlib import Path
 from states import resolve
+import parcel_probe
 
 warnings.filterwarnings("ignore")
 
@@ -37,6 +38,12 @@ def is_likely_vacant(owner: str, landuse: str) -> bool:
     return any(kw in text for kw in VACANT_KEYWORDS)
 
 
+#: Tally across every adjacent-land query, reported at the end of the
+#: run. Without it a site with no neighbours and a site whose query
+#: failed both read as "no_features".
+ADJACENT_OUTCOMES = parcel_probe.OutcomeCounter("WVGIS adjacent-parcel queries")
+
+
 def query_adjacent(svc, lon, lat, buffer_m=600):
     out_fields = ",".join(f for f in [
         svc.get("owner"), svc.get("acres"), svc.get("landuse")
@@ -55,22 +62,36 @@ def query_adjacent(svc, lon, lat, buffer_m=600):
             "returnGeometry": "false",
             "f": "json",
         }, headers=HEADERS, timeout=20, verify=False)
-        return r.json().get("features", [])
+        status, detail, feats = parcel_probe.classify_response(r)
     except Exception as e:
-        print(f"    [WARN] {e}")
-        return []
+        status, detail, feats = parcel_probe.classify_exception(e)
+    ADJACENT_OUTCOMES.record(status, detail)
+    if status in parcel_probe.FAILURES:
+        print(f"    [FAIL] parcel query {status}: {detail}")
+    # Returns the STATUS as well as the features. Returning a bare
+    # list left the caller with [] for a failure and [] for a genuine
+    # empty, so it reported both as "no parcels within 600m" however
+    # carefully this function tallied them.
+    return status, feats
 
 
 def summarize_adjacent(site_name, county, lat, lon):
     county_key = county.upper().replace(" COUNTY", "")
 
     svc = STATEWIDE_SVC
-    feats = query_adjacent(svc, lon, lat, buffer_m=600)
+    status, feats = query_adjacent(svc, lon, lat, buffer_m=600)
     if not feats and county_key in COUNTY_OVERRIDES:
         svc = COUNTY_OVERRIDES[county_key]
-        feats = query_adjacent(svc, lon, lat, buffer_m=600)
+        status, feats = query_adjacent(svc, lon, lat, buffer_m=600)
+    if status in parcel_probe.FAILURES:
+        # NOT "no_features". The service never answered, so nothing is
+        # known about this site's neighbours either way.
+        return {"status": "query_failed", "query_status": status,
+                "note": f"Parcel service FAILED ({status}) for {county}. "
+                        f"Nothing is known about adjacent land here; this is "
+                        f"not a finding that the site has no neighbours."}
     if not feats:
-        return {"status": "no_features", "note": f"No parcels returned within 600m for {county} (statewide layer + county override both empty/unavailable)"}
+        return {"status": "no_features", "note": f"Service answered: no parcels within 600m for {county}"}
 
     owner_field = svc.get("owner", "")
     acres_field = svc.get("acres", "")
@@ -121,6 +142,9 @@ def summarize_adjacent(site_name, county, lat, lon):
 
 
 def expansion_verdict(result):
+    if result["status"] == "query_failed":
+        return (f"UNMEASURED — parcel service failed "
+                f"({result.get('query_status', 'unknown')}); not a finding")
     if result["status"] != "ok":
         return "UNKNOWN — no GIS data"
     vacant = result["vacant_acres"]
@@ -173,6 +197,7 @@ for _, site in mid_sites.iterrows():
         print(f"  {result['note']}")
 
     verdict = expansion_verdict(result)
+    _failed = result.get("status") == "query_failed"
     print(f"\n  Expansion potential: {verdict}")
 
     rows.append({
@@ -182,9 +207,15 @@ for _, site in mid_sites.iterrows():
         "County": county,
         "site_acres": own_acres,
         "site_owner": result.get("site_owner", ""),
-        "vacant_adjacent_acres": result.get("vacant_acres", 0),
-        "same_owner_adjacent_acres": result.get("same_owner_acres", 0),
-        "total_potential_acres": own_acres + result.get("vacant_acres", 0) + result.get("same_owner_acres", 0),
+        # BLANK, not 0, when the service failed. A zero here is a
+        # measurement: it says this site has no vacant land next to it.
+        # Writing one for a query that never answered put a fabricated
+        # measurement into the CSV, and anyone summing or sorting the
+        # column would have treated an outage as zero vacancy.
+        "vacant_adjacent_acres": None if _failed else result.get("vacant_acres", 0),
+        "same_owner_adjacent_acres": None if _failed else result.get("same_owner_acres", 0),
+        "total_potential_acres": None if _failed else (
+            own_acres + result.get("vacant_acres", 0) + result.get("same_owner_acres", 0)),
         "expansion_verdict": verdict,
     })
 
@@ -194,7 +225,13 @@ out = pd.DataFrame(rows, columns=cols)
 out_path = ROOT / "outputs" / "csv" / "adjacent_land_25_50ac.csv"
 out.to_csv(out_path, index=False)
 print(f"\n\nSaved: {out_path}")
+ADJACENT_OUTCOMES.report()
 if out.empty:
-    print("No sites in the 25-50 acre range — nothing to report.")
+    if ADJACENT_OUTCOMES.total == 0:
+        print("No sites in the 25-50 acre range, so no parcel query ran. "
+              "This says nothing about adjacent land; it says no site "
+              "reached the size filter.")
+    else:
+        print("No sites in the 25-50 acre range — nothing to report.")
 else:
     print(out[["rank","Plant_Name","site_acres","vacant_adjacent_acres","total_potential_acres","expansion_verdict"]].to_string(index=False))

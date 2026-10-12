@@ -69,13 +69,24 @@ failing at step 11 of 11.
 
 ### Adding a state
 
-Run `python3 -m states` and it tells you exactly what is missing. Today every
-declared state needs the same one or two lookups:
+Run `python3 -m states` and it tells you exactly what is missing.
+
+**All ten states now carry a FIPS code** (filled 2026-10-12 from the Census
+Bureau ANSI/FIPS state table, with the source recorded in each config's
+`notes.sources.fips` and a test that refuses a FIPS without one). That moved
+TN, TX, VA and AR from `declared` to `partial`, meaning runnable.
+
+What a new state needs:
 
 1. **`fips`** — the two-digit state code, as a **string** (leading zeros are
-   significant; Alabama is `"01"`, not `1`).
-2. **`state_score`** — the market score, a judgment call, not a lookup. Five of
-   the nine already have one inherited from `STATE_SCORE`.
+   significant; Alabama is `"01"`, not `1`). From the Census ANSI table, and
+   recorded with its source so a later reader can tell a looked-up value from
+   a typed one.
+2. **`state_score`** — the market score, a judgment call, not a lookup. AL, KY,
+   LA, MS and ND are the five still waiting on one, which is the only reason
+   they remain `declared`.
+3. **`bbox`** and **`name`**, and optionally a statewide parcel service, which
+   is what separates `partial` from `full`.
 
 `nhd_name` is filled by rule (`name.replace(' ', '_')`), validated against WV,
 and labelled `derived` so it never reads as looked up. It is cheap to be wrong

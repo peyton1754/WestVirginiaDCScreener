@@ -26,6 +26,7 @@ import pandas as pd
 import geopandas as gpd
 from pathlib import Path
 from states import resolve
+import parcel_probe
 
 warnings.filterwarnings("ignore")
 
@@ -173,6 +174,10 @@ def query_parcel_svc(svc, lon, lat):
     # the old 200m point-buffer radius; Acres_C is always populated so the
     # Shape__Area fallback this function used for TN isn't needed here.
     pad = 0.002
+    # Returns (owner, acres, imp, status, detail). The status is what
+    # separates "this site has no parcel" from "the service never
+    # answered"; the old code returned the same thing for both, which
+    # is why the 2026-10-12 run's zero could not be attributed.
     try:
         r = requests.get(svc["url"], params={
             "geometry": f"{lon-pad},{lat-pad},{lon+pad},{lat+pad}",
@@ -183,9 +188,20 @@ def query_parcel_svc(svc, lon, lat):
             "returnGeometry": "false",
             "f": "json",
         }, headers=HEADERS, timeout=15, verify=False)
-        feats = r.json().get("features", [])
-        if not feats:
-            return None, None, None
+    except Exception as e:
+        status, detail, _ = parcel_probe.classify_exception(e)
+        return None, None, None, status, detail
+
+    status, detail, feats = parcel_probe.classify_response(r)
+    if status != parcel_probe.OK:
+        return None, None, None, status, detail
+
+    # Parsing is OUTSIDE the request's try on purpose. It used to sit
+    # inside it, so a feature missing "attributes", or a non-numeric
+    # acreage, was handed to classify_exception and reported as a
+    # transport failure. The service had answered; it was the SHAPE
+    # that was wrong, which is bad_json.
+    try:
         acres_field = svc.get("acres", "")
         owner_field = svc.get("owner", "")
         # Pick largest parcel
@@ -194,24 +210,37 @@ def query_parcel_svc(svc, lon, lat):
         acres = float(a.get(acres_field, 0) or 0) or None
         owner = str(a.get(owner_field, "")).strip() if owner_field else None
         imp   = float(a.get(svc.get("imp", ""), 0) or 0) or None
-        return owner, acres, imp
-    except Exception:
-        return None, None, None
+    except Exception as e:
+        return (None, None, None, parcel_probe.BAD_JSON,
+                f"{type(e).__name__} reading parcel attributes: {e}")
+    return owner, acres, imp, parcel_probe.OK, detail
 
 n_cty = 0
+statewide_outcomes = parcel_probe.OutcomeCounter("WVGIS statewide parcel service")
+county_outcomes = parcel_probe.OutcomeCounter("county GIS parcel services")
 for i in range(len(cands)):
     county = str(cands.iloc[i].get("County", "")).upper().strip().replace(" COUNTY", "")
     pt = cands_wgs.geometry.iloc[i]
 
-    owner, acres, imp = query_parcel_svc(STATEWIDE_SVC, pt.x, pt.y)
+    owner, acres, imp, status, detail = query_parcel_svc(STATEWIDE_SVC, pt.x, pt.y)
+    statewide_outcomes.record(status, detail)
     source = "WV_STATEWIDE"
     if (not owner and not acres) and county in COUNTY_SERVICES:
-        owner, acres, imp = query_parcel_svc(COUNTY_SERVICES[county], pt.x, pt.y)
+        owner, acres, imp, status, detail = query_parcel_svc(
+            COUNTY_SERVICES[county], pt.x, pt.y)
+        county_outcomes.record(status, detail)
         source = f"COUNTY_GIS_{county}"
 
     if owner:
         cands.at[cands.index[i], "current_owner"] = owner
         cands.at[cands.index[i], "owner_source"] = source
+    elif status in parcel_probe.FAILURES:
+        # The distinction this module computes has to survive to disk.
+        # Without this a failed query and a site with genuinely no
+        # parcel are identical in top_candidates_wv.csv (blank owner,
+        # blank owner_source, missing parcel_acres), and the status
+        # lives only as long as the terminal scrollback.
+        cands.at[cands.index[i], "owner_source"] = f"QUERY_FAILED:{status}"
     if acres and acres > 0:
         cands.at[cands.index[i], "parcel_acres"] = acres
         cands.at[cands.index[i], "cad_acres"] = str(round(acres, 1))
@@ -222,6 +251,9 @@ for i in range(len(cands)):
     time.sleep(0.2)
 
 print(f"  Parcel matches (statewide + county GIS): {n_cty}")
+statewide_outcomes.report()
+if county_outcomes.total:
+    county_outcomes.report()
 
 
 # ===================================================================

@@ -108,13 +108,36 @@ def test_selection_collapses_duplicates_and_preserves_order():
     assert resolve.selected(env={resolve.SELECT_ENV: 'WV, WV'}) == ['WV']
 
 
+def a_declared_state():
+    """Pick any state the registry currently reports as declared.
+
+    Deliberately NOT a hardcoded code. This was pinned to TN, and when TN's
+    FIPS was filled on 2026-10-12 it became runnable and three tests failed for
+    a reason that had nothing to do with what they were testing. The property
+    under test is "a state that cannot run is refused", not "TN is refused".
+    """
+    for code, cfg in sorted(schema.load_all().items()):
+        if schema.readiness(cfg)[0] == schema.READY_DECLARED:
+            return code
+    return None
+
+
 def test_selection_refuses_a_declared_state_and_names_its_gaps():
-    """TN is declared: it has no FIPS. The refusal must say so at startup
-    rather than let a 1 to 2 GB download run and filter the wrong state."""
+    """A declared state must be refused at startup, with the unfilled field
+    named, rather than letting a 1 to 2 GB download run and then filter a
+    state that was never configured."""
+    code = a_declared_state()
+    if code is None:
+        pytest.skip("no declared state in the registry to exercise the refusal")
+    _level, reasons = schema.readiness(schema.load(code))
     with pytest.raises(schema.StateConfigError) as e:
-        resolve.selected(env={resolve.SELECT_ENV: 'TN'})
+        resolve.selected(env={resolve.SELECT_ENV: code})
     msg = str(e.value)
-    assert 'TN' in msg and 'fips' in msg, msg
+    assert code in msg, msg
+    # Every gap the readiness report names must reach the refusal, so the
+    # person reading it learns the whole remaining job and not just the first.
+    for r in reasons:
+        assert r in msg, f"refusal omitted a gap: {r!r}"
 
 
 def test_selection_refuses_an_unknown_state():
@@ -157,11 +180,14 @@ def test_single_selected_refuses_two_states_and_names_the_script(monkeypatch):
 
 
 def test_single_selected_still_validates_readiness_first():
-    """TN alone is declared, so the readiness refusal must win over the count
-    check rather than the state slipping through as 'only one state'."""
+    """One declared state must fail the readiness check rather than slip
+    through the count check as 'well, it is only one state'."""
+    code = a_declared_state()
+    if code is None:
+        pytest.skip("no declared state in the registry to exercise the refusal")
     with pytest.raises(schema.StateConfigError) as e:
-        resolve.single_selected('x', env={resolve.SELECT_ENV: 'TN'})
-    assert 'fips' in str(e.value)
+        resolve.single_selected('x', env={resolve.SELECT_ENV: code})
+    assert code in str(e.value)
 
 
 @pytest.mark.parametrize('filename', ['check_adjacent_land.py', 'enrich_columns.py'])
@@ -229,7 +255,15 @@ def test_a_mutated_service_dict_does_not_leak_back_into_the_registry(monkeypatch
         'parcels': {
             'statewide_service': {'url': PARCEL_URL, 'owner': 'FullOwnerName',
                                   'acres': 'Acres_C', 'landuse': None},
-            'county_overrides': {},
+            # NON-EMPTY on purpose. Every shipped config has this empty or
+            # null, and `county_overrides()` ends in `or {}`, so with an empty
+            # value both the copying and the non-copying form return a fresh
+            # dict and no test can tell them apart. An empty fixture made this
+            # assertion unfalsifiable, which a mutation sweep reported as the
+            # copy being untested. Tennessee is the real case: its statewide
+            # layer misses six counties, so the first state that needs
+            # overrides is the first one this would have leaked.
+            'county_overrides': {'Davidson': {'url': 'https://example.gov/d'}},
         },
     }
     monkeypatch.setattr(resolve.schema, 'load', lambda abbr: shared)
@@ -240,7 +274,7 @@ def test_a_mutated_service_dict_does_not_leak_back_into_the_registry(monkeypatch
 
     ovr = resolve.county_overrides('WV')
     ovr['Kanawha'] = 'MUTATED'
-    assert resolve.county_overrides('WV') == {}
+    assert resolve.county_overrides('WV') == {'Davidson': {'url': 'https://example.gov/d'}}
 
 
 # --- the rewiring actually happened ---------------------------------------
@@ -383,13 +417,28 @@ def test_bbox_query_string_refuses_negative_padding():
 
 # --- fips -----------------------------------------------------------------
 
-def test_fips_returns_wv_and_none_elsewhere():
+def test_fips_reads_the_registry():
     assert resolve.fips('WV') == '54'
-    assert resolve.fips('TN') is None
 
 
-def test_require_fips_raises_with_the_remaining_work_named():
+def test_every_state_now_carries_a_fips():
+    """All nine gaps were closed on 2026-10-12 from the Census ANSI table.
+    This asserts the closure holds rather than assuming it."""
+    unfilled = [c for c in schema.all_codes() if resolve.fips(c) is None]
+    assert unfilled == [], f"states still without a FIPS: {unfilled}"
+
+
+def test_fips_returns_none_for_an_unfilled_state(monkeypatch):
+    """No real state is unfilled any more, so the None path is exercised
+    against a stub. Without this the branch would go untested the moment the
+    last gap closed, and silently stop working."""
+    monkeypatch.setattr(resolve.schema, 'load', lambda abbr: {'fips': None})
+    assert resolve.fips('ZZ') is None
+
+
+def test_require_fips_raises_with_the_remaining_work_named(monkeypatch):
     assert resolve.require_fips('WV') == '54'
+    monkeypatch.setattr(resolve.schema, 'load', lambda abbr: {'fips': None})
     with pytest.raises(schema.StateConfigError) as e:
-        resolve.require_fips('TN')
+        resolve.require_fips('ZZ')
     assert 'Census' in str(e.value), "the refusal must say where to look it up"
