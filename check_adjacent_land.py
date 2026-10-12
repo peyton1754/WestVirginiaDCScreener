@@ -11,6 +11,7 @@ import warnings
 import pandas as pd
 from pathlib import Path
 from states import resolve
+import parcel_probe
 
 warnings.filterwarnings("ignore")
 
@@ -37,6 +38,12 @@ def is_likely_vacant(owner: str, landuse: str) -> bool:
     return any(kw in text for kw in VACANT_KEYWORDS)
 
 
+#: Tally across every adjacent-land query, reported at the end of the
+#: run. Without it a site with no neighbours and a site whose query
+#: failed both read as "no_features".
+ADJACENT_OUTCOMES = parcel_probe.OutcomeCounter("WVGIS adjacent-parcel queries")
+
+
 def query_adjacent(svc, lon, lat, buffer_m=600):
     out_fields = ",".join(f for f in [
         svc.get("owner"), svc.get("acres"), svc.get("landuse")
@@ -55,10 +62,13 @@ def query_adjacent(svc, lon, lat, buffer_m=600):
             "returnGeometry": "false",
             "f": "json",
         }, headers=HEADERS, timeout=20, verify=False)
-        return r.json().get("features", [])
+        status, detail, feats = parcel_probe.classify_response(r)
     except Exception as e:
-        print(f"    [WARN] {e}")
-        return []
+        status, detail, feats = parcel_probe.classify_exception(e)
+    ADJACENT_OUTCOMES.record(status, detail)
+    if status in parcel_probe.FAILURES:
+        print(f"    [FAIL] parcel query {status}: {detail}")
+    return feats
 
 
 def summarize_adjacent(site_name, county, lat, lon):
