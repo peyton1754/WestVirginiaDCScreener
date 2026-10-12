@@ -188,9 +188,20 @@ def query_parcel_svc(svc, lon, lat):
             "returnGeometry": "false",
             "f": "json",
         }, headers=HEADERS, timeout=15, verify=False)
-        status, detail, feats = parcel_probe.classify_response(r)
-        if status != parcel_probe.OK:
-            return None, None, None, status, detail
+    except Exception as e:
+        status, detail, _ = parcel_probe.classify_exception(e)
+        return None, None, None, status, detail
+
+    status, detail, feats = parcel_probe.classify_response(r)
+    if status != parcel_probe.OK:
+        return None, None, None, status, detail
+
+    # Parsing is OUTSIDE the request's try on purpose. It used to sit
+    # inside it, so a feature missing "attributes", or a non-numeric
+    # acreage, was handed to classify_exception and reported as a
+    # transport failure. The service had answered; it was the SHAPE
+    # that was wrong, which is bad_json.
+    try:
         acres_field = svc.get("acres", "")
         owner_field = svc.get("owner", "")
         # Pick largest parcel
@@ -199,10 +210,10 @@ def query_parcel_svc(svc, lon, lat):
         acres = float(a.get(acres_field, 0) or 0) or None
         owner = str(a.get(owner_field, "")).strip() if owner_field else None
         imp   = float(a.get(svc.get("imp", ""), 0) or 0) or None
-        return owner, acres, imp, parcel_probe.OK, detail
     except Exception as e:
-        status, detail, _ = parcel_probe.classify_exception(e)
-        return None, None, None, status, detail
+        return (None, None, None, parcel_probe.BAD_JSON,
+                f"{type(e).__name__} reading parcel attributes: {e}")
+    return owner, acres, imp, parcel_probe.OK, detail
 
 n_cty = 0
 statewide_outcomes = parcel_probe.OutcomeCounter("WVGIS statewide parcel service")
@@ -223,6 +234,13 @@ for i in range(len(cands)):
     if owner:
         cands.at[cands.index[i], "current_owner"] = owner
         cands.at[cands.index[i], "owner_source"] = source
+    elif status in parcel_probe.FAILURES:
+        # The distinction this module computes has to survive to disk.
+        # Without this a failed query and a site with genuinely no
+        # parcel are identical in top_candidates_wv.csv (blank owner,
+        # blank owner_source, missing parcel_acres), and the status
+        # lives only as long as the terminal scrollback.
+        cands.at[cands.index[i], "owner_source"] = f"QUERY_FAILED:{status}"
     if acres and acres > 0:
         cands.at[cands.index[i], "parcel_acres"] = acres
         cands.at[cands.index[i], "cad_acres"] = str(round(acres, 1))

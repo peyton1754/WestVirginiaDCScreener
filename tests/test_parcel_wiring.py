@@ -165,6 +165,28 @@ def test_enrich_still_sends_the_envelope_query_this_service_requires():
     assert len(params['geometry'].split(',')) == 4
 
 
+def test_enrich_files_a_malformed_feature_as_bad_json_not_a_network_failure():
+    """The service answered; it was the SHAPE that was wrong. The parsing used
+    to sit inside the request's try, so a feature missing "attributes" reached
+    classify_exception and the run printed
+    `transport_error: KeyError: 'attributes'`, telling the reader the network
+    had failed when it had not."""
+    malformed = FakeResponse(200, {'features': [{'no_attributes_key': 1}]})
+    fn, _ = enrich_fn(malformed)
+    _o, _a, _i, status, detail = fn(SVC, -80.0, 39.0)
+    assert status == pp.BAD_JSON, f"got {status}, which blames the wrong layer"
+    assert status in pp.FAILURES
+    assert 'attributes' in detail
+
+
+def test_enrich_files_a_non_numeric_acreage_as_bad_json():
+    weird = FakeResponse(200, {'features': [
+        {'attributes': {'FullOwnerName': 'ACME', 'Acres_C': 'not a number'}}]})
+    fn, _ = enrich_fn(weird)
+    _o, _a, _i, status, _d = fn(SVC, -80.0, 39.0)
+    assert status == pp.BAD_JSON
+
+
 def test_enrich_asks_only_for_fields_the_service_has():
     fn, req = enrich_fn(GOOD)
     fn(SVC, -80.0, 39.0)
@@ -183,20 +205,23 @@ def adjacent_fn(outcome):
     return fn, req, counter
 
 
-def test_adjacent_returns_features_on_success_and_records_ok():
+def test_adjacent_returns_the_status_alongside_the_features():
+    """It used to return a bare list, so the caller got [] for a failure and []
+    for a genuine empty and reported both as 'no parcels within 600m', however
+    carefully this function tallied them. The status has to leave the function."""
     fn, _req, counter = adjacent_fn(GOOD)
-    feats = fn(SVC, -80.0, 39.0)
+    status, feats = fn(SVC, -80.0, 39.0)
+    assert status == pp.OK
     assert len(feats) == 2
     assert counter.counts[pp.OK] == 1
     assert counter.failed == 0
 
 
-def test_adjacent_distinguishes_a_failure_from_no_neighbours():
-    """summarize_adjacent turns an empty list into status 'no_features'. Before
-    this fix a failed query produced that same empty list, so a service outage
-    was reported as a site with no adjacent parcels."""
+def test_adjacent_hands_back_a_failure_status_the_caller_can_branch_on():
     fn, _req, counter = adjacent_fn(WVGIS_400)
-    feats = fn(SVC, -80.0, 39.0)
+    status, feats = fn(SVC, -80.0, 39.0)
+    assert status == pp.HTTP_ERROR
+    assert status in pp.FAILURES
     assert feats == []
     assert counter.failed == 1, "the failure must be tallied, not silently dropped"
     assert counter.counts[pp.EMPTY] == 0, "a failure must not count as a genuine empty"
@@ -204,14 +229,19 @@ def test_adjacent_distinguishes_a_failure_from_no_neighbours():
 
 def test_adjacent_counts_a_genuine_empty_as_empty():
     fn, _req, counter = adjacent_fn(TRULY_EMPTY)
-    assert fn(SVC, -80.0, 39.0) == []
+    status, feats = fn(SVC, -80.0, 39.0)
+    assert status == pp.EMPTY
+    assert status not in pp.FAILURES
+    assert feats == []
     assert counter.counts[pp.EMPTY] == 1
     assert counter.failed == 0
 
 
 def test_adjacent_records_a_transport_failure_rather_than_raising():
     fn, _req, counter = adjacent_fn(TimeoutError('timed out'))
-    assert fn(SVC, -80.0, 39.0) == []
+    status, feats = fn(SVC, -80.0, 39.0)
+    assert status == pp.TRANSPORT_ERROR
+    assert feats == []
     assert counter.counts[pp.TRANSPORT_ERROR] == 1
 
 
@@ -232,3 +262,103 @@ def test_the_enrich_caller_reports_its_outcomes():
     assert 'statewide_outcomes.report()' in src, (
         "outcomes are tallied but never printed, so the run log still cannot "
         "distinguish a failure from an empty result")
+
+
+def counter_attribute_uses(filename, counter_name):
+    """Every attribute accessed on a named counter, found by parsing the module.
+
+    A substring search would match the name inside a comment or a docstring,
+    which is exactly how a write-only counter went unnoticed.
+    """
+    tree = ast.parse(open(os.path.join(REPO, filename), encoding='utf-8').read())
+    return {n.attr for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+            and n.value.id == counter_name}
+
+
+def test_the_adjacent_counter_is_read_and_not_only_written():
+    """A counter that is recorded into and never read produces no output at
+    all, however correct its tallies are. That shipped once: the comment above
+    its definition said it was 'reported at the end of the run' while the only
+    attribute ever used on it was .record, so the whole apparatus was
+    write-only and a run where every query failed printed no summary."""
+    uses = counter_attribute_uses('check_adjacent_land.py', 'ADJACENT_OUTCOMES')
+    assert 'record' in uses, "nothing records into the counter"
+    assert uses & {'report', 'lines'}, (
+        "ADJACENT_OUTCOMES is written but never read, so its tallies reach "
+        f"nobody. Attributes used: {sorted(uses)}")
+
+
+def summarize_with(query_result):
+    """Lift summarize_adjacent with its collaborators stubbed.
+
+    Behavioural, not a substring search. The first version of this test
+    asserted `'query_failed' in src`, which a mutation defeated trivially: it
+    changed the returned status back to 'no_features' while the string
+    survived elsewhere in the file, and the test stayed green. A source-text
+    assertion checks that a word is present, not that the code does anything
+    with it.
+    """
+    fn, _ns = load_function(
+        'check_adjacent_land.py', 'summarize_adjacent',
+        {'STATEWIDE_SVC': SVC, 'COUNTY_OVERRIDES': {},
+         'query_adjacent': lambda svc, lon, lat, buffer_m=600: query_result,
+         'is_likely_vacant': lambda owner, landuse: False})
+    return fn('Test Site', 'HARRISON', 39.0, -80.0)
+
+
+def test_a_failed_adjacent_query_is_not_reported_as_no_parcels():
+    """The service never answered, so nothing is known about this site's
+    neighbours. Reporting that as 'no parcels within 600m' states a finding
+    that was never measured."""
+    result = summarize_with((pp.HTTP_ERROR, []))
+    assert result['status'] != 'no_features', (
+        "a failed query is still reported as a site with no adjacent parcels")
+    assert result['status'] == 'query_failed'
+    assert result.get('query_status') == pp.HTTP_ERROR
+    assert 'not a finding' in result['note'].lower() or 'FAILED' in result['note']
+
+
+def test_a_genuine_empty_adjacent_query_is_still_reported_as_no_parcels():
+    """The other direction. The service answered, so 'no parcels within 600m'
+    is a real finding and must still be reported as one."""
+    result = summarize_with((pp.EMPTY, []))
+    assert result['status'] == 'no_features'
+    assert 'FAILED' not in result['note']
+
+
+def test_the_two_adjacent_outcomes_do_not_share_a_status():
+    failed = summarize_with((pp.TRANSPORT_ERROR, []))
+    empty = summarize_with((pp.EMPTY, []))
+    assert failed['status'] != empty['status'], (
+        "a failed query and a genuine empty still carry the same status, which "
+        "is the defect this change exists to fix")
+
+
+def test_the_adjacent_caller_keeps_the_status_query_adjacent_returns():
+    src = open(os.path.join(REPO, 'check_adjacent_land.py'), encoding='utf-8').read()
+    assert 'status, feats = query_adjacent(' in src, (
+        "the caller discards the status query_adjacent now returns")
+
+
+def test_a_failed_adjacent_query_is_not_written_to_the_csv_as_a_zero():
+    """A zero in vacant_adjacent_acres is a measurement: it says this site has
+    no vacant land beside it. Writing one for a query that never answered puts
+    a fabricated measurement in the CSV, and anyone summing or sorting that
+    column treats an outage as zero vacancy."""
+    src = open(os.path.join(REPO, 'check_adjacent_land.py'), encoding='utf-8').read()
+    for col in ('vacant_adjacent_acres', 'same_owner_adjacent_acres',
+                'total_potential_acres'):
+        line = next(l for l in src.splitlines() if f'"{col}":' in l)
+        assert '_failed' in line, f"{col} still writes a number when the query failed: {line.strip()}"
+
+
+def test_a_failed_enrich_query_leaves_a_trace_on_disk():
+    """Without this the status lives only as long as the terminal scrollback:
+    a failed row and a genuinely parcel-less row are byte-identical in
+    top_candidates_wv.csv, both with a blank owner and no parcel_acres."""
+    src = open(os.path.join(REPO, 'enrich_columns.py'), encoding='utf-8').read()
+    assert 'QUERY_FAILED:' in src, (
+        "a failed parcel query writes nothing to any column, so the "
+        "distinction does not survive the run")
+    assert 'parcel_probe.FAILURES' in src

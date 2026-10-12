@@ -59,7 +59,14 @@ def classify_response(response):
     still cannot mistake a failure for data.
     """
     status_code = getattr(response, 'status_code', None)
-    if status_code is not None and not (200 <= status_code < 300):
+    if status_code is None:
+        # Not a shape this code can vouch for. A requests.Response always
+        # carries status_code, so reaching here means some other client or
+        # wrapper is in play and the transport was never checked. Treating it
+        # as a clean result would skip the HTTP check entirely, which is the
+        # first thing this module exists to do.
+        return BAD_JSON, 'response carries no status_code, so the request was never verified', []
+    if not (200 <= status_code < 300):
         return HTTP_ERROR, f"HTTP {status_code}", []
 
     try:
@@ -122,8 +129,11 @@ class OutcomeCounter:
         if status not in self.counts:
             raise ValueError(f"unknown status {status!r}")
         self.counts[status] += 1
-        # Keep the FIRST example of each failure, which is the one that shows
-        # what went wrong before any retry or rate limit muddies it.
+        # Keep the first NON-EMPTY example of each failure, which is the one
+        # that shows what went wrong before any retry or rate limit muddies
+        # it. "Non-empty" rather than "first" on purpose: record() defaults
+        # detail to '', and a caller that omits it should not claim the slot
+        # and leave the summary with a failure count and no explanation.
         if status in FAILURES and status not in self.first_detail and detail:
             self.first_detail[status] = detail
 

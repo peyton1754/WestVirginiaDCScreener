@@ -204,8 +204,47 @@ def test_an_empty_counter_prints_nothing_alarming():
 
 
 def test_report_uses_the_given_printer():
+    """Asserts CONTENT, not self-equality.
+
+    This previously asserted only `out == c.lines()`, the renderer compared
+    against itself, which passes even when lines() returns nothing at all. A
+    cold review caught it: stubbing lines() to return [] failed five other
+    tests and left this one green.
+    """
     c = pp.OutcomeCounter('WVGIS')
     c.record(pp.OK)
+    c.record(pp.HTTP_ERROR, 'HTTP 400')
     out = []
     c.report(printer=out.append)
-    assert out == c.lines()
+    assert out, "report() printed nothing"
+    text = '\n'.join(out)
+    assert 'WVGIS' in text and '2 queries' in text
+    assert '[FAIL] http_error: 1' in text
+    assert 'HTTP 400' in text
+
+
+def test_a_response_without_a_status_code_is_not_given_a_free_pass():
+    """A requests.Response always carries status_code, so an object without one
+    means some other client is in play and the transport was never checked.
+    Classifying it as a clean empty would skip the HTTP check entirely."""
+    class NoStatusCode:
+        def json(self):
+            return {'features': []}
+
+    status, detail, feats = pp.classify_response(NoStatusCode())
+    assert status == pp.BAD_JSON, "the HTTP check was silently skipped"
+    assert 'status_code' in detail
+    assert feats == []
+
+
+def test_first_detail_keeps_the_first_NON_EMPTY_example():
+    """record() defaults detail to '', and a caller that omits it must not
+    claim the slot and leave the summary with a failure count and no
+    explanation. Pinned because the docstring and the code disagreed about
+    this until a cold review measured it."""
+    c = pp.OutcomeCounter()
+    c.record(pp.HTTP_ERROR, '')
+    c.record(pp.HTTP_ERROR, 'the first real explanation')
+    c.record(pp.HTTP_ERROR, 'a later one')
+    assert c.first_detail['http_error'] == 'the first real explanation'
+    assert c.counts[pp.HTTP_ERROR] == 3, "every occurrence still counts"
