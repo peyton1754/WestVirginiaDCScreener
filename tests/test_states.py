@@ -134,14 +134,40 @@ def test_wv_is_fully_ready():
 
 
 def test_no_state_carries_a_fips_that_was_not_sourced():
-    """WV's FIPS is the only one in this repo's source. Any other state showing
-    a FIPS means someone filled it from memory, which this registry forbids.
-    When a FIPS is genuinely looked up, add it here with its source."""
-    sourced = {'WV': '54'}
+    """A FIPS without a recorded source is one somebody filled from memory.
+
+    This used to hold a hardcoded {'WV': '54'}, which worked while WV was the
+    only sourced value and had to be edited the moment the other nine were
+    filled from the Census ANSI table on 2026-10-12. The config now carries its
+    own source, so the rule generalizes to the next state without touching this
+    file.
+    """
     for code, cfg in schema.load_all().items():
-        if cfg['fips'] is not None:
-            assert code in sourced and cfg['fips'] == sourced[code], (
-                f"{code} carries fips {cfg['fips']!r} with no recorded source")
+        if cfg['fips'] is None:
+            continue
+        source = ((cfg.get('notes') or {}).get('sources') or {}).get('fips')
+        assert source, f"{code} carries fips {cfg['fips']!r} with no recorded source"
+        assert len(source) > 20, f"{code}'s fips source is too thin to check: {source!r}"
+
+
+def test_every_fips_is_a_two_digit_string_with_leading_zeros_intact():
+    """Alabama is '01'. An integer 1, or a stripped '1', is a different lookup
+    key and would screen nothing. This is the specific way a FIPS goes wrong
+    quietly, so it gets its own assertion over the real registry."""
+    for code, cfg in schema.load_all().items():
+        f = cfg['fips']
+        if f is None:
+            continue
+        assert isinstance(f, str) and len(f) == 2 and f.isdigit(), (
+            f"{code} carries fips {f!r}")
+
+
+def test_the_nine_declared_states_now_have_their_fips():
+    """The gap this registry was built to make visible is closed. If a state
+    ever reverts to a null FIPS this fails, rather than the loss being noticed
+    when a run screens nothing."""
+    missing = [c for c, cfg in schema.load_all().items() if cfg['fips'] is None]
+    assert missing == [], f"states still missing a FIPS: {missing}"
 
 
 def test_declared_states_name_their_gaps():
