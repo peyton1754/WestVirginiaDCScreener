@@ -276,6 +276,92 @@ print(f"  Strong (ACRES+SEMS): {len(strong_ids):,} | Weak (RCRA-only): {len(rcra
 
 
 # ---------------------------------------------------------------------------
+# Name tokens that must never identify a company
+# ---------------------------------------------------------------------------
+# COMMON_WORDS strips non-distinguishing tokens from each active GHG
+# reporter's name to build a "company root"; any candidate whose name
+# CONTAINS a root is then excluded as an active reporter. The asymmetry that
+# matters:
+#
+#   a token IN the list      cannot become part of a root  -> site kept
+#   a token MISSING from it  can become a root on its own   -> site dropped
+#
+# The list used to carry TENNESSEE, NASHVILLE, MEMPHIS, KNOXVILLE,
+# CHATTANOOGA and CLARKSVILLE, which is the fork's lineage, and no West
+# Virginia equivalents. On a WV run a reporter named "CHARLESTON <something
+# generic>" leaves CHARLESTON as the only surviving token, long enough to
+# become a root by itself, and every candidate with CHARLESTON in its name is
+# excluded. That exclusion prints as a count and never names a site.
+#
+# Over-exclusion drops a real candidate silently. Under-exclusion keeps an
+# active reporter in the pool, where the retirement-confidence multiplier
+# grades it ACTIVE_WARNING and a person reading the list sees the name. The
+# visible error is the cheaper one, so geographic tokens are stopworded, and
+# both directions are reported rather than either being assumed.
+
+#: Industry and corporate-form words, which say nothing about WHICH company.
+#: Not state-specific, so these stay as a literal.
+GENERIC_NAME_WORDS = frozenset({
+    "THE", "CITY", "STATE", "PLANT", "FACILITY", "STATION",
+    "PORT", "NORTH", "SOUTH", "EAST", "WEST", "INTERNATIONAL", "INC",
+    "CORP", "LLC", "COMPANY", "STEEL", "CHEMICAL",
+    "INDUSTRIES", "SERVICES", "PRODUCTS", "MANUFACTURING", "SYSTEMS",
+    "ENERGY", "POWER", "GAS", "OIL", "PETROLEUM", "REFINERY",
+    "TERMINAL", "SERVICE", "INDUSTRIAL", "GROUP",
+    "RESOURCES", "MATERIALS", "SUPPLY", "DIVISION", "OPERATIONS",
+    "WORKS", "NATIONAL", "AMERICAN", "GENERAL", "UNITED", "FEDERAL",
+    "CORPORATION", "LIMITED", "PARTNERS", "HOLDINGS",
+})
+
+#: Column names FRS uses for a facility's city, most specific first.
+CITY_COLUMNS = ("CITY_NAME", "CITY", "FAC_CITY", "LOCALITY_NAME")
+
+
+def state_name_tokens(codes=None):
+    """The selected states' own names, as upper-case tokens.
+
+    From the registry rather than retyped, so WEST and VIRGINIA arrive for a
+    WV run without this file naming either.
+    """
+    out = set()
+    for name in resolve.state_names(codes or TARGET_STATES).values():
+        out.update(t for t in name.replace("_", " ").upper().split() if t)
+    return out
+
+
+def city_name_tokens(frame):
+    """City tokens taken from the facility file's OWN city column.
+
+    Derived, not typed. A hand-written city list is a factual value supplied
+    from memory, it is wrong for every state but the one it was written for,
+    and getting it wrong drops candidates silently.
+
+    Returns (tokens, note). The note says which column was used, or that
+    none was found, because an empty set here means geographic tokens CAN
+    become roots and that should not be silent.
+    """
+    col = next((c for c in CITY_COLUMNS if c in frame.columns), None)
+    if col is None:
+        return set(), (
+            f"no city column found among {', '.join(CITY_COLUMNS)}; city "
+            f"names can therefore become company roots on their own")
+    tokens = set()
+    for value in frame[col].dropna().astype(str).str.upper():
+        tokens.update(t for t in value.replace(",", " ").split() if len(t) >= 4)
+    return tokens, f"{len(tokens)} city token(s) from {col}"
+
+
+def generic_name_tokens(frame):
+    """Every token that must not identify a company, for this run's states."""
+    cities, note = city_name_tokens(frame)
+    tokens = set(GENERIC_NAME_WORDS) | state_name_tokens() | cities
+    print(f"    name tokens treated as generic: {len(tokens)} "
+          f"({len(GENERIC_NAME_WORDS)} industry/corporate, "
+          f"{len(state_name_tokens())} from the state name, {note})")
+    return tokens
+
+
+# ---------------------------------------------------------------------------
 # Source 2: EPA FRS Manufacturing Facilities
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
@@ -324,26 +410,34 @@ for state in TARGET_STATES:
         # Exclude active GHG reporters
         ghg_direct = merged["PGM_SYS_ACRNMS"].str.contains("E-GGRT", na=False)
 
-        COMMON_WORDS = {
-            "THE", "CITY", "STATE", "TENNESSEE", "PLANT", "FACILITY", "STATION",
-            "PORT", "NORTH", "SOUTH", "EAST", "WEST", "INTERNATIONAL", "INC",
-            "CORP", "LLC", "COMPANY", "STEEL", "CHEMICAL",
-            "NASHVILLE", "MEMPHIS", "KNOXVILLE", "CHATTANOOGA", "CLARKSVILLE",
-            "INDUSTRIES", "SERVICES", "PRODUCTS", "MANUFACTURING", "SYSTEMS",
-            "ENERGY", "POWER", "GAS", "OIL", "PETROLEUM", "REFINERY",
-            "TERMINAL", "SERVICE", "INDUSTRIAL", "GROUP",
-            "RESOURCES", "MATERIALS", "SUPPLY", "DIVISION", "OPERATIONS",
-            "WORKS", "NATIONAL", "AMERICAN", "GENERAL", "UNITED", "FEDERAL",
-            "CORP", "CORPORATION", "LIMITED", "PARTNERS", "HOLDINGS",
-        }
+        # Generic tokens, which must never become a company root on their
+        # own. See generic_name_tokens() for why this list used to carry
+        # Tennessee's cities and what a missing entry costs.
+        COMMON_WORDS = generic_name_tokens(fac)
         ghg_reporters = fac[fac["PGM_SYS_ACRNMS"].str.contains("E-GGRT", na=False)]
         ghg_company_roots = set()
+        n_no_root = 0
         for gname in ghg_reporters[name_col].dropna().str.upper():
             words = [w for w in gname.split() if w not in COMMON_WORDS and len(w) >= 4]
             if len(words) >= 2:
                 ghg_company_roots.add(f"{words[0]} {words[1]}")
             elif len(words) == 1 and len(words[0]) >= 6:
                 ghg_company_roots.add(words[0])
+            else:
+                n_no_root += 1
+        # BOTH directions, reported. A root excludes every candidate whose
+        # name contains it, and that used to print only as a count, so a
+        # geographic token acting as a root was invisible. A reporter that
+        # yields no root is the other direction: it will not be excluded by
+        # name at all.
+        _single = sorted(r for r in ghg_company_roots if " " not in r)
+        print(f"    {len(ghg_company_roots)} GHG company root(s) built from "
+              f"{len(ghg_reporters)} reporter(s); {n_no_root} reporter(s) "
+              f"yielded no root and so exclude nothing by name")
+        if _single:
+            print(f"    [WARN] {len(_single)} root(s) are a SINGLE token and "
+                  f"will exclude any candidate whose name contains them: "
+                  f"{', '.join(_single)}")
 
         def _has_ghg_parent(site_name: str) -> bool:
             if not site_name or pd.isna(site_name):
