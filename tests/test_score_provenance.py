@@ -74,6 +74,13 @@ def lift(*names):
 
 
 @pytest.fixture(scope='module')
+def ns2():
+    return lift('PARCEL_BANDS', 'PARCEL_TOP_BAND_ACRES', 'PARCEL_UNKNOWN_SCORE',
+                'PARCEL_IMPLAUSIBLE_MULTIPLE', 'PARCEL_IMPLAUSIBLE_ACRES',
+                'parcel_acreage_is_measured', 'parcel_implausibility_flags')
+
+
+@pytest.fixture(scope='module')
 def ns():
     return lift('PARCEL_BANDS', 'PARCEL_TOP_BAND_ACRES', 'PARCEL_UNKNOWN_SCORE',
                 'PARCEL_IMPLAUSIBLE_MULTIPLE', 'PARCEL_IMPLAUSIBLE_ACRES',
@@ -292,6 +299,88 @@ def test_rows_are_marked_independently(ns):
         dist_to_water_mi=[0.4, 0.4], flood_zone=['X', 'X'],
         seismic_ss=[0.18, 0.18], brownfield_type=['Coal', 'Coal']))
     assert list(out) == ['score_gas', 'score_parcel']
+
+
+def test_the_result_is_aligned_to_the_frames_index(ns):
+    """The call site is `top["imputed_scores"] = imputed_axes(top)`, which
+    aligns by LABEL. top's index is the rank, so a Series carrying a fresh
+    RangeIndex writes NaN for every row whose rank is not 0..n-1, silently."""
+    import pandas as pd
+    f = frame(parcel_acres=[120.0, None], dist_to_pipeline_mi=[1.2, 1.2],
+              dist_to_water_mi=[0.4, 0.4], flood_zone=['X', 'X'],
+              seismic_ss=[0.18, 0.18], brownfield_type=['Coal', 'Coal'])
+    f.index = [5, 16]
+    out = ns['imputed_axes'](f)
+    assert list(out.index) == [5, 16], (
+        f"the result's index is {list(out.index)}, so assigning it back to "
+        f"the frame would align wrongly")
+    f['imputed_scores'] = out
+    assert f.loc[16, 'imputed_scores'] == 'score_parcel'
+    assert f.loc[5, 'imputed_scores'] == ''
+
+
+def test_a_duplicate_index_does_not_lose_a_row(ns):
+    """Indexing the per-row list by label returns a Series on a duplicate
+    index, and the lookup-by-value variant marks only the first occurrence.
+    `top`'s index is unique today; nothing in that file guarantees it, and
+    the failure would land after every download had already run."""
+    f = frame(parcel_acres=[120.0, None], dist_to_pipeline_mi=[1.2, 1.2],
+              dist_to_water_mi=[0.4, 0.4], flood_zone=['X', 'X'],
+              seismic_ss=[0.18, 0.18], brownfield_type=['Coal', 'Coal'])
+    f.index = [7, 7]
+    out = list(ns['imputed_axes'](f))
+    assert out == ['', 'score_parcel'], (
+        f"got {out}; the second row's imputed parcel score was lost or "
+        f"attributed to the first")
+
+
+# --- the parcel implausibility flag --------------------------------------
+
+def test_the_flag_marks_only_the_oversized_parcel(ns2):
+    out = list(ns2['parcel_implausibility_flags'](
+        frame(parcel_acres=[23475.98, 504.71, None])))
+    assert out == [True, False, False]
+
+
+def test_the_flag_is_aligned_to_the_frames_index(ns2):
+    f = frame(parcel_acres=[23475.98, 504.71])
+    f.index = [3, 9]
+    out = ns2['parcel_implausibility_flags'](f)
+    assert list(out.index) == [3, 9]
+
+
+def test_the_absent_column_fallback_is_also_aligned(ns2):
+    """The .apply path carries the index for free; the fallback builds a
+    Series by hand and has to be told. A mutation sweep found that only the
+    first path was covered, because the alignment test used a frame that HAD
+    the column. The call site assigns by label, so a fresh RangeIndex here
+    writes NaN for every row whose rank is not 0..n-1."""
+    f = frame(brownfield_type=['Coal', 'Coal'])
+    f.index = [3, 9]
+    out = ns2['parcel_implausibility_flags'](f)
+    assert list(out.index) == [3, 9], (
+        f"the fallback returned index {list(out.index)}, so assigning it "
+        f"back to the frame would align wrongly")
+    f['parcel_acres_implausible'] = out
+    assert f['parcel_acres_implausible'].notna().all(), (
+        "assigning the fallback produced NaN, so the column says nothing")
+
+
+def test_an_absent_parcel_column_is_flagged_false_and_reported(ns2, capsys):
+    """Unguarded this was a KeyError at the very end of a pipeline run, after
+    every download and every service query had already succeeded."""
+    out = ns2['parcel_implausibility_flags'](frame(brownfield_type=['Coal']))
+    assert list(out) == [False]
+    printed = capsys.readouterr().out
+    assert 'no parcel_acres column' in printed
+    assert 'not a finding' in printed, (
+        "the message does not say that a missing column is not a finding "
+        "that every acreage is plausible")
+
+
+def test_the_flag_on_an_empty_frame_is_an_empty_bool_series(ns2):
+    out = ns2['parcel_implausibility_flags'](frame(parcel_acres=[]))
+    assert len(out) == 0
 
 
 def test_an_empty_frame_does_not_raise(ns):

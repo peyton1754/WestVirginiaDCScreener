@@ -874,8 +874,16 @@ IMPUTED_SCORE_INPUTS = [
 
 
 def imputed_axes(frame):
-    """A per-row, comma-separated list of the axes scored from a default."""
-    marks = pd.Series([[] for _ in range(len(frame))], index=frame.index)
+    """A per-row, comma-separated list of the axes scored from a default.
+
+    Built POSITIONALLY. Indexing the per-row list by label (`marks[idx]`)
+    works until the frame has a duplicate index, at which point the label
+    returns a Series and the run dies with "'Series' object has no attribute
+    'append'". `top`'s index is the rank and is unique today; nothing in this
+    file guarantees it, and the failure would land after every download and
+    every service query had already run.
+    """
+    marks = [[] for _ in range(len(frame))]
     for score_col, input_col, measured in IMPUTED_SCORE_INPUTS:
         if input_col not in frame.columns:
             # The input is absent entirely, so every row on this axis is a
@@ -883,10 +891,33 @@ def imputed_axes(frame):
             for lst in marks:
                 lst.append(f"{score_col}(no {input_col} column)")
             continue
-        is_imputed = ~measured(frame[input_col])
-        for idx in frame.index[is_imputed]:
-            marks[idx].append(score_col)
-    return marks.apply(lambda lst: ",".join(lst))
+        is_imputed = list(~measured(frame[input_col]))
+        for pos, imputed in enumerate(is_imputed):
+            if imputed:
+                marks[pos].append(score_col)
+    return pd.Series([",".join(lst) for lst in marks], index=frame.index)
+
+
+def parcel_implausibility_flags(frame):
+    """Per-row: is this parcel figure too large to be describing a site?
+
+    A function rather than two lines at the end of the script, because the
+    module-level version could not be tested and a mutation that removed its
+    absent-column guard left the suite green.
+
+    Returns False for an absent column, with a word about it, because an
+    unguarded KeyError here would end the run AFTER every download and every
+    service query had already succeeded, and because "no column" is a
+    missing input rather than a finding that every acreage is plausible.
+    """
+    if "parcel_acres" not in frame.columns:
+        print("  [WARN] no parcel_acres column, so no parcel figure could be "
+              "checked for implausibility. That is a missing input, not a "
+              "finding that every acreage is plausible.")
+        return pd.Series([False] * len(frame), index=frame.index, dtype=bool)
+    return frame["parcel_acres"].apply(
+        lambda a: bool(parcel_acreage_is_measured(a)
+                       and float(a) > PARCEL_IMPLAUSIBLE_ACRES))
 
 
 infra_score = (
@@ -1256,9 +1287,7 @@ EXPORT_COLS = [
 # Provenance, computed on the exported rows. Both columns describe how a
 # number was arrived at rather than adding a new measurement.
 top["imputed_scores"] = imputed_axes(top)
-top["parcel_acres_implausible"] = top["parcel_acres"].apply(
-    lambda a: bool(parcel_acreage_is_measured(a)
-                   and float(a) > PARCEL_IMPLAUSIBLE_ACRES))
+top["parcel_acres_implausible"] = parcel_implausibility_flags(top)
 
 _n_imputed = (top["imputed_scores"].astype(str).str.strip() != "").sum()
 print(f"\n  {_n_imputed} of {len(top)} exported rows carry at least one "
