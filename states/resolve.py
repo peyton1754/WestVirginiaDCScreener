@@ -119,11 +119,16 @@ def single_selected(context, env=None):
     """
     codes = selected(env=env)
     if len(codes) > 1:
+        # The explanation stays GENERIC. An earlier version listed all
+        # three consumers and what each holds, which read well and made the
+        # "names the script" test unfalsifiable: a mutation that dropped
+        # {context} entirely left every consumer's filename in the string.
         raise schema.StateConfigError(
-            f"{context} holds one state's parcel service in a module-level "
-            f"constant and cannot screen {len(codes)} states at once "
-            f"({', '.join(codes)}). Run it once per state, or rewire it to "
-            f"resolve the service per site before selecting more than one.")
+            f"{context} resolves one state's constants at module level (a "
+            f"parcel service, a Census FIPS, a state name) and cannot screen "
+            f"{len(codes)} states at once ({', '.join(codes)}). Run it once "
+            f"per state, or rewire it to resolve them per site before "
+            f"selecting more than one.")
     return codes[0]
 
 

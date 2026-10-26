@@ -74,8 +74,12 @@ for i in range(len(cands)):
     if not needs_basin.iloc[i]:
         continue
     pt = cands_wgs.geometry.iloc[i]
-    try:
-        r = requests.get(WBD_URL, params={
+    # Retried, because run 5 lost 8 of these to 5 HTTP 504s and 3
+    # ReadTimeouts in one pass -- both the service saying "not now", and
+    # both recoverable. A rejected query is NOT retried; see
+    # source_probe.RETRYABLE_HTTP.
+    status, detail, feats, tries = source_probe.fetch(
+        lambda: requests.get(WBD_URL, params={
             "geometry": f"{pt.x},{pt.y}",
             "geometryType": "esriGeometryPoint",
             "inSR": "4326",
@@ -83,11 +87,9 @@ for i in range(len(cands)):
             "outFields": "name,huc8",
             "returnGeometry": "false",
             "f": "json",
-        }, headers=HEADERS, timeout=15)
-        status, detail, feats = source_probe.classify_response(r)
-    except Exception as e:
-        status, detail, feats = source_probe.classify_exception(e)
-    wbd_outcomes.record(status, detail)
+        }, headers=HEADERS, timeout=15),
+        attempts=3)
+    wbd_outcomes.record(status, detail, tries)
     if status == source_probe.OK:
         try:
             name = feats[0]["attributes"].get("name", "")
@@ -209,12 +211,14 @@ def query_parcel_svc(svc, lon, lat, out_fields=None):
     # the old 200m point-buffer radius; Acres_C is always populated so the
     # Shape__Area fallback this function used for TN isn't needed here.
     pad = 0.002
-    # Returns (owner, acres, imp, status, detail). The status is what
+    # Returns (owner, acres, imp, status, detail, tries). The status is what
     # separates "this site has no parcel" from "the service never
     # answered"; the old code returned the same thing for both, which
-    # is why the 2026-10-12 run's zero could not be attributed.
-    try:
-        r = requests.get(svc["url"], params={
+    # is why the 2026-10-12 run's zero could not be attributed. `tries`
+    # rides along so the caller's counter can report what the retry bought;
+    # a retry nobody measures is an assumption.
+    status, detail, feats, tries = source_probe.fetch(
+        lambda: requests.get(svc["url"], params={
             "geometry": f"{lon-pad},{lat-pad},{lon+pad},{lat+pad}",
             "geometryType": "esriGeometryEnvelope",
             "inSR": "4326",
@@ -222,14 +226,10 @@ def query_parcel_svc(svc, lon, lat, out_fields=None):
             "outFields": out_fields,
             "returnGeometry": "false",
             "f": "json",
-        }, headers=HEADERS, timeout=15, verify=False)
-    except Exception as e:
-        status, detail, _ = source_probe.classify_exception(e)
-        return None, None, None, status, detail
-
-    status, detail, feats = source_probe.classify_response(r)
+        }, headers=HEADERS, timeout=15, verify=False),
+        attempts=3)
     if status != source_probe.OK:
-        return None, None, None, status, detail
+        return None, None, None, status, detail, tries
 
     # Parsing is OUTSIDE the request's try on purpose. It used to sit
     # inside it, so a feature missing "attributes", or a non-numeric
@@ -259,8 +259,11 @@ def query_parcel_svc(svc, lon, lat, out_fields=None):
         imp   = float(_attr(a, svc.get("imp", "")) or 0) or None
     except Exception as e:
         return (None, None, None, source_probe.BAD_JSON,
-                f"{type(e).__name__} reading parcel attributes: {e}")
-    return owner, acres, imp, source_probe.OK, detail
+                f"{type(e).__name__} reading parcel attributes: {e}", tries)
+    return owner, acres, imp, source_probe.OK, detail, tries
+
+if "acres_source" not in cands.columns:
+    cands["acres_source"] = ""
 
 n_cty = 0
 statewide_outcomes = source_probe.OutcomeCounter("WVGIS statewide parcel service")
@@ -269,13 +272,14 @@ for i in range(len(cands)):
     county = str(cands.iloc[i].get("County", "")).upper().strip().replace(" COUNTY", "")
     pt = cands_wgs.geometry.iloc[i]
 
-    owner, acres, imp, status, detail = query_parcel_svc(STATEWIDE_SVC, pt.x, pt.y)
-    statewide_outcomes.record(status, detail)
+    owner, acres, imp, status, detail, tries = query_parcel_svc(
+        STATEWIDE_SVC, pt.x, pt.y)
+    statewide_outcomes.record(status, detail, tries)
     source = "WV_STATEWIDE"
     if (not owner and not acres) and county in COUNTY_SERVICES:
-        owner, acres, imp, status, detail = query_parcel_svc(
+        owner, acres, imp, status, detail, tries = query_parcel_svc(
             COUNTY_SERVICES[county], pt.x, pt.y)
-        county_outcomes.record(status, detail)
+        county_outcomes.record(status, detail, tries)
         source = f"COUNTY_GIS_{county}"
 
     if owner:
@@ -291,6 +295,11 @@ for i in range(len(cands)):
     if acres and acres > 0:
         cands.at[cands.index[i], "parcel_acres"] = acres
         cands.at[cands.index[i], "cad_acres"] = str(round(acres, 1))
+        # Attributed, because this is the one acreage source with a
+        # documented limitation -- a point query returns whatever polygon
+        # the point lands in -- and it was the one source left unlabelled.
+        # The EPA override below sets its own value and takes precedence.
+        cands.at[cands.index[i], "acres_source"] = source
     if imp:
         cands.at[cands.index[i], "cad_imp_value"] = str(int(imp))
     if owner or acres:
@@ -483,13 +492,12 @@ for i in range(len(cands)):
     WHERE c.comppct_r > 10
     ORDER BY c.comppct_r DESC
     """
-    try:
-        r = requests.post(SSURGO_URL, json={"query": query, "format": "JSON"}, timeout=20)
-        # SSURGO returns its rows under "Table", not "features".
-        status, detail, rows = source_probe.classify_response(r, data_key="Table")
-    except Exception as e:
-        status, detail, rows = source_probe.classify_exception(e)
-    soil_outcomes.record(status, detail)
+    # SSURGO returns its rows under "Table", not "features".
+    status, detail, rows, tries = source_probe.fetch(
+        lambda: requests.post(SSURGO_URL, json={"query": query, "format": "JSON"},
+                              timeout=20),
+        data_key="Table", attempts=3)
+    soil_outcomes.record(status, detail, tries)
     if status == source_probe.OK:
         try:
             cands.at[cands.index[i], "soil_type"]     = str(rows[0][0] or "")

@@ -1,5 +1,5 @@
 """
-score_and_export_al.py
+score_and_export.py
 Scores each filtered West Virginia candidate 0–120 across seven dimensions and exports
 the top 1,000 (or all survivors if fewer) as CSV + GeoJSON.
 
@@ -25,6 +25,7 @@ import geopandas as gpd
 import requests
 from pathlib import Path
 from shapely.strtree import STRtree
+from states import resolve
 
 # ---------------------------------------------------------------------------
 # Config
@@ -43,6 +44,14 @@ MIN_SCORE      = 28
 URBAN_MIN_ALAND_M2 = 200_000_000
 
 AL_RAW = ROOT / "data" / "westvirginia" / "raw"
+
+# Which state this run scores, and the two values derived from it that used to
+# be typed by hand. SCORED_STATE is resolved rather than hardcoded so the
+# Census file paths and the printed heading cannot disagree with each other or
+# with the registry.
+SCORED_STATE = resolve.single_selected("score_and_export.py")
+SCORED_STATE_FIPS = resolve.require_fips(SCORED_STATE)
+SCORED_STATE_NAME = resolve.state_names([SCORED_STATE])[SCORED_STATE].replace("_", " ")
 
 # ---------------------------------------------------------------------------
 # Scoring tables (same as TX except STATE_SCORE)
@@ -111,8 +120,15 @@ BROWNFIELD_SCORE = {
     "Other":                  5,
 }
 
-# Tennessee is an emerging market — low power costs (Tennessee Power/TVA),
-# strong state incentives, growing interest from hyperscalers
+# Market tiers. The comment here used to describe Tennessee's market, which
+# is the fork's lineage rather than this repo's subject; the per-state
+# reasoning now sits beside each entry.
+#
+# NOT migrated to the registry, deliberately: GA, NC and OH have no registry
+# entry, and the consumer is `.map(STATE_SCORE).fillna(0)`, so moving this
+# would silently score any GA site 0 on the state axis. See the
+# "WHAT IS DELIBERATELY NOT MIGRATED" note in states/resolve.py, which
+# tests/test_resolve.py pins.
 STATE_SCORE = {
     "VA": 20,
     "TX": 18,
@@ -125,17 +141,45 @@ STATE_SCORE = {
 }
 
 
-def score_parcel(acres) -> float:
+#: The parcel rubric's bands, named so the implausibility threshold below
+#: derives from the top one instead of being a second typed number.
+PARCEL_BANDS = ((500, 5.0), (250, 4.0), (100, 3.0), (50, 2.0))
+PARCEL_TOP_BAND_ACRES = PARCEL_BANDS[0][0]
+
+#: What score_parcel returns when the acreage is unknown. Higher than the
+#: 0.0 a measured sub-50-acre parcel gets, which means a FAILED parcel query
+#: outscores a small site. Deliberately left that way: scoring an unknown at
+#: zero buries a site that might be 600 acres and nothing would prompt a
+#: recheck, whereas a slightly over-ranked site stays visible in a list a
+#: person reads. The row is marked instead -- see IMPUTED_SCORE_INPUTS.
+PARCEL_UNKNOWN_SCORE = 2.5
+
+#: A parcel this far above the rubric's top band is not describing a site.
+#: The WVGIS point query returns whatever polygon the point lands in, and
+#: enrich_columns.py's own comment records that limitation; DTE SMITH BRANCH
+#: comes back as 23,475.98 acres of coal landholding, 47 times the top band.
+#: A FLAG, never a cap: the score is already 5.0 anywhere above 500 acres,
+#: so a wrong threshold here costs a label and not a ranking.
+PARCEL_IMPLAUSIBLE_MULTIPLE = 10
+PARCEL_IMPLAUSIBLE_ACRES = PARCEL_TOP_BAND_ACRES * PARCEL_IMPLAUSIBLE_MULTIPLE
+
+
+def parcel_acreage_is_measured(acres) -> bool:
+    """Whether score_parcel will score this acreage or impute it."""
     try:
         a = float(acres)
     except (TypeError, ValueError):
-        return 2.5
-    if not np.isfinite(a) or a <= 0:
-        return 2.5
-    if a >= 500:  return 5.0
-    if a >= 250:  return 4.0
-    if a >= 100:  return 3.0
-    if a >= 50:   return 2.0
+        return False
+    return bool(np.isfinite(a)) and a > 0
+
+
+def score_parcel(acres) -> float:
+    if not parcel_acreage_is_measured(acres):
+        return PARCEL_UNKNOWN_SCORE
+    a = float(acres)
+    for floor, points in PARCEL_BANDS:
+        if a >= floor:
+            return points
     return 0.0
 
 
@@ -647,7 +691,14 @@ else:
 # ---------------------------------------------------------------------------
 print("\nChecking Opportunity Zone eligibility …")
 oz_csv   = AL_RAW / "opportunity_zones" / "oz_designations.csv"
-tract_zip = AL_RAW / "opportunity_zones" / "tl_2023_47_tract.zip"
+# DERIVED, not typed. This literal said tl_2023_47_tract.zip until
+# 2026-10-26: 47 is Tennessee, the state this repo was forked from, while
+# download_westvirginia.py has always written tl_2023_54_tract.zip. The
+# consumer guards on exists(), so the mismatch printed "[skip] Opportunity
+# Zone data not found" and scored every WV site 0 of 5 on this axis, for as
+# long as the fork has existed.
+tract_zip = (AL_RAW / "opportunity_zones"
+             / f"tl_2023_{SCORED_STATE_FIPS}_tract.zip")
 tract_dir = AL_RAW / "opportunity_zones" / "tracts"
 
 if oz_csv.exists() and tract_zip.exists():
@@ -680,8 +731,15 @@ if oz_csv.exists() and tract_zip.exists():
         print(f"  [WARN] OZ enrichment failed: {e}")
         gdf["opportunity_zone"] = False
 else:
+    # Naming the paths matters: the previous message said the DATA was
+    # missing, which is what let a wrong filename read as a missing download
+    # for the life of the fork.
+    missing = [str(p.relative_to(ROOT)) for p in (oz_csv, tract_zip) if not p.exists()]
     gdf["opportunity_zone"] = False
-    print("  [skip] Opportunity Zone data not found")
+    print(f"  [skip] Opportunity Zone scoring disabled; not on disk: "
+          f"{', '.join(missing)}")
+    print(f"         Every site therefore scores 0 of 5 on this axis. That is "
+          f"a missing input, not a finding that no site is in a zone.")
 
 # ---------------------------------------------------------------------------
 # FEMA Flood Zone (NFIP)
@@ -790,6 +848,77 @@ gdf["score_air_permit"]   = gdf["has_air_permit"].apply(score_air_permit) \
 gdf["score_fiber"]        = gdf["fiber_max_speed_mbps"].apply(score_fiber)
 gdf["score_opportunity_zone"] = gdf["opportunity_zone"].apply(score_opportunity_zone)
 gdf["score_flood_risk"]   = gdf["flood_zone"].apply(score_flood_risk)
+
+# Which score came from a measurement and which from a default. Six of the
+# thirteen scorers return a neutral value for a missing input, and until now
+# the export gave no way to tell those apart from a measured one -- so a row
+# whose parcel query failed, whose pipeline distance was never computed and
+# whose flood zone is unknown looked exactly like a row where all three were
+# measured. The scores are unchanged; what is added is the provenance.
+#
+# Each entry is (score column, input column, predicate for "measured").
+def _is_present(series):
+    return series.notna() & (series.astype(str).str.strip() != "")
+
+
+IMPUTED_SCORE_INPUTS = [
+    ("score_parcel", "parcel_acres",
+     lambda s: s.apply(parcel_acreage_is_measured)),
+    ("score_gas", "dist_to_pipeline_mi", _is_present),
+    ("score_water", "dist_to_water_mi", _is_present),
+    ("score_flood_risk", "flood_zone", _is_present),
+    ("score_seismic", "seismic_ss", _is_present),
+    ("score_brownfield", "brownfield_type",
+     lambda s: s.isin(BROWNFIELD_SCORE.keys())),
+]
+
+
+def imputed_axes(frame):
+    """A per-row, comma-separated list of the axes scored from a default.
+
+    Built POSITIONALLY. Indexing the per-row list by label (`marks[idx]`)
+    works until the frame has a duplicate index, at which point the label
+    returns a Series and the run dies with "'Series' object has no attribute
+    'append'". `top`'s index is the rank and is unique today; nothing in this
+    file guarantees it, and the failure would land after every download and
+    every service query had already run.
+    """
+    marks = [[] for _ in range(len(frame))]
+    for score_col, input_col, measured in IMPUTED_SCORE_INPUTS:
+        if input_col not in frame.columns:
+            # The input is absent entirely, so every row on this axis is a
+            # default. Saying nothing here would be the silent case.
+            for lst in marks:
+                lst.append(f"{score_col}(no {input_col} column)")
+            continue
+        is_imputed = list(~measured(frame[input_col]))
+        for pos, imputed in enumerate(is_imputed):
+            if imputed:
+                marks[pos].append(score_col)
+    return pd.Series([",".join(lst) for lst in marks], index=frame.index)
+
+
+def parcel_implausibility_flags(frame):
+    """Per-row: is this parcel figure too large to be describing a site?
+
+    A function rather than two lines at the end of the script, because the
+    module-level version could not be tested and a mutation that removed its
+    absent-column guard left the suite green.
+
+    Returns False for an absent column, with a word about it, because an
+    unguarded KeyError here would end the run AFTER every download and every
+    service query had already succeeded, and because "no column" is a
+    missing input rather than a finding that every acreage is plausible.
+    """
+    if "parcel_acres" not in frame.columns:
+        print("  [WARN] no parcel_acres column, so no parcel figure could be "
+              "checked for implausibility. That is a missing input, not a "
+              "finding that every acreage is plausible.")
+        return pd.Series([False] * len(frame), index=frame.index, dtype=bool)
+    return frame["parcel_acres"].apply(
+        lambda a: bool(parcel_acreage_is_measured(a)
+                       and float(a) > PARCEL_IMPLAUSIBLE_ACRES))
+
 
 infra_score = (
     gdf["score_gas"]
@@ -1071,7 +1200,7 @@ print(f"\n{len(above_threshold)} candidates score ≥{MIN_SCORE}; "
 # Results table
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("RANKED CANDIDATES — TENNESSEE")
+print(f"RANKED CANDIDATES — {SCORED_STATE_NAME.upper()}")
 print("=" * 60)
 
 display_cols = [
@@ -1134,6 +1263,7 @@ EXPORT_COLS = [
     "pipeline_operators_5mi", "pipeline_max_dia_inches", "pipeline_best_operator",
     "dist_to_water_mi", "water_basin", "water_permitted_af",
     "parcel_acres", "cad_acres", "osm_acres", "acres_source",
+    "parcel_acres_implausible",
     "retirement_confidence", "retirement_signals", "rcra_corrective_action",
     "nearest_metro", "dist_to_metro_mi",
     "energy_community",
@@ -1152,7 +1282,24 @@ EXPORT_COLS = [
     "score_seismic",
     "opportunity_zone", "flood_zone", "eia860_retired",
     "infra_score", "score_retirement_mult",
+    "imputed_scores",
 ]
+# Provenance, computed on the exported rows. Both columns describe how a
+# number was arrived at rather than adding a new measurement.
+top["imputed_scores"] = imputed_axes(top)
+top["parcel_acres_implausible"] = parcel_implausibility_flags(top)
+
+_n_imputed = (top["imputed_scores"].astype(str).str.strip() != "").sum()
+print(f"\n  {_n_imputed} of {len(top)} exported rows carry at least one "
+      f"imputed score; the imputed_scores column names the axes.")
+for _name, _acres in top.loc[top["parcel_acres_implausible"],
+                             ["Plant_Name", "parcel_acres"]].itertuples(index=False):
+    print(f"  [WARN] {_name}: parcel_acres {_acres:,.0f} is more than "
+          f"{PARCEL_IMPLAUSIBLE_MULTIPLE}x the rubric's top band "
+          f"({PARCEL_TOP_BAND_ACRES} acres). A point query returns whatever "
+          f"polygon the point lands in, so this is likely a landholding "
+          f"boundary rather than a usable site area.")
+
 export_df = top.reset_index()
 export_cols_present = [c for c in EXPORT_COLS if c in export_df.columns]
 

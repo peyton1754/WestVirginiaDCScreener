@@ -20,7 +20,7 @@
     "parcels": "One statewide composite service covers all 55 counties, so no county overrides are needed.",
     "sources": {
       "fips": "This repo's own literals: download_westvirginia.py lines 199, 200 and 240 carry \"54\", including gdf[\"STATEFP\"] == \"54\". Extracted, never retyped.",
-      "parcels.statewide_service.acres": "WVGIS layer metadata as printed by refresh-data run 4 (id 40276191635) on 2026-10-26. That run reported the layer has 21 fields and that Acres_C is not among them; CALC_ACRE is the only field in the list whose name contains ACRE. Acres_C worked until at least July 2026 and was removed upstream some time before 2026-10-12, when it began failing every query with 'Failed to execute query'. NOT yet confirmed: that CALC_ACRE's values are in acres rather than another unit; the first run carrying it will show whether the magnitudes are plausible."
+      "parcels.statewide_service.acres": "WVGIS layer metadata as printed by refresh-data run 4 (id 40276191635) on 2026-10-26. That run reported the layer has 21 fields and that Acres_C is not among them; CALC_ACRE is the only field in the list whose name contains ACRE. Acres_C worked until at least July 2026 and was removed upstream some time before 2026-10-12, when it began failing every query with 'Failed to execute query'. UNIT CONFIRMED by run 5 (id 40378766799) on 2026-10-26: CALC_ACRE reproduces the Acres_C values recorded in July for the two sites that appear in both records, AURORA ACQUISITION at 28.01616 then 28.01605 and LOWE PRODUCTS at 41.81042 then 41.81025. Same quantity, same unit, to four decimals."
     }
   },
   "parcels": {

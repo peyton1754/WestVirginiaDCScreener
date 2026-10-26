@@ -216,16 +216,67 @@ def test_single_selected_still_validates_readiness_first():
     assert code in str(e.value)
 
 
-@pytest.mark.parametrize('filename', ['check_adjacent_land.py', 'enrich_columns.py'])
+#: Every script that resolves a state's constants at module level, with
+#: what each one holds. They are not all parcel services: score_and_export
+#: joined the list when its Census tract path stopped being a literal, and
+#: a two-state selection there would use the first state's FIPS for every
+#: site in both.
+SINGLE_STATE_CONSUMERS = {
+    'check_adjacent_land.py': 'a parcel service',
+    'enrich_columns.py': 'a parcel service',
+    'score_and_export.py': 'a Census FIPS and a state name',
+}
+
+
+@pytest.mark.parametrize('filename', sorted(SINGLE_STATE_CONSUMERS))
 def test_the_single_state_consumers_use_the_guard(filename):
-    """Both scripts hold their parcel service in a module-level constant, so
-    both must be guarded. Without this, one could be rewired to plain
-    selected()[0] and silently regain the mis-attribution bug."""
+    """Each holds one state's constants in a module-level value, so each must
+    be guarded. Without this, one could be rewired to plain selected()[0] and
+    silently regain the mis-attribution bug."""
+    holds = SINGLE_STATE_CONSUMERS[filename]
     src = open(os.path.join(REPO, filename), encoding='utf-8').read()
     assert 'resolve.single_selected(' in src, (
-        f"{filename} resolves a parcel service without the multi-state guard")
+        f"{filename} resolves {holds} without the multi-state guard")
     assert 'resolve.selected()[0]' not in src, (
         f"{filename} takes the first selected state without guarding the rest")
+
+
+def test_every_module_level_fips_user_is_guarded():
+    """A control on the list above, so a new consumer cannot be added without
+    a row. require_fips at module level means one state's code is baked into
+    every path the run builds."""
+    import glob
+    unguarded = []
+    for path in sorted(glob.glob(os.path.join(REPO, '*.py'))):
+        src = open(path, encoding='utf-8').read()
+        if 'require_fips' not in src and 'resolve.fips(' not in src:
+            continue
+        name = os.path.basename(path)
+        if 'resolve.single_selected(' not in src:
+            unguarded.append(name)
+        elif name not in SINGLE_STATE_CONSUMERS:
+            unguarded.append(f"{name} (guarded but not in "
+                             f"SINGLE_STATE_CONSUMERS)")
+    assert unguarded == [], (
+        f"these read a state FIPS at module level: {unguarded}")
+
+
+@pytest.mark.parametrize('caller', sorted(SINGLE_STATE_CONSUMERS))
+def test_the_refusal_names_the_caller_and_no_other_consumer(monkeypatch, caller):
+    """An earlier message listed all three consumers and what each holds. It
+    read well and made this assertion unfalsifiable: a mutation that dropped
+    {context} altogether still left every filename in the string. So the
+    check is now that the caller IS named and the others are NOT."""
+    monkeypatch.setattr(resolve, 'selected', lambda env=None: ['WV', 'TN'])
+    with pytest.raises(schema.StateConfigError) as e:
+        resolve.single_selected(caller)
+    msg = str(e.value)
+    assert caller in msg, "the refusal does not name the caller to rewire"
+    others = [f for f in SINGLE_STATE_CONSUMERS if f != caller and f in msg]
+    assert others == [], (
+        f"the refusal names {others} as well as the caller, so a reader "
+        f"cannot tell which script to rewire and the assertion above cannot "
+        f"fail")
 
 
 # --- every resolver reproduces the literal it replaced --------------------
@@ -277,8 +328,10 @@ def test_the_acreage_field_records_where_it_came_from():
         'parcels.statewide_service.acres')
     assert source, "the acreage field name has no recorded source"
     assert '40276191635' in source, "the source must name the run that established it"
-    assert 'NOT yet confirmed' in source or 'not yet confirmed' in source.lower(), (
-        "the source must still carry the open question about the unit")
+    assert 'UNIT CONFIRMED' in source, (
+        "the source must record that the unit question was settled, and how")
+    assert '40378766799' in source, (
+        "the confirmation must name the run that established it")
 
 
 def test_county_overrides_reproduces_the_literal():

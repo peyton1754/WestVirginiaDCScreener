@@ -37,6 +37,8 @@ unchanged.
 """
 from __future__ import annotations
 
+import time
+
 # A query that reached the service and got parcels back.
 OK = 'ok'
 # Reached the service, which answered correctly that there is nothing here.
@@ -49,6 +51,76 @@ BAD_JSON = 'bad_json'              # 200, but the body is not JSON (HTML, proxy 
 TRANSPORT_ERROR = 'transport_error'  # timeout, DNS, TLS, connection reset
 
 FAILURES = (HTTP_ERROR, SERVICE_ERROR, BAD_JSON, TRANSPORT_ERROR)
+
+#: HTTP statuses worth a second attempt. 5xx is the service failing to serve a
+#: request it accepted; 429 is it refusing the rate; 408 and 425 are it giving
+#: up on the request before serving it. Every other 4xx says the REQUEST is
+#: wrong, and retrying a wrong request only takes longer to fail -- which is
+#: also why SERVICE_ERROR is absent: an ArcGIS error body on HTTP 200 is a
+#: rejected query, and the 2026-10-26 outage would have retried 25 times and
+#: still reported nothing.
+RETRYABLE_HTTP = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+def is_retryable(status, response=None):
+    """Whether this outcome is the kind a second attempt can change.
+
+    The HTTP code is read off the RESPONSE, never parsed out of the detail
+    string. The detail is prose for a human reading the log, and making
+    control flow depend on its wording means a reworded message silently
+    changes which failures get retried.
+    """
+    if status == TRANSPORT_ERROR:
+        return True
+    if status == HTTP_ERROR:
+        return getattr(response, 'status_code', None) in RETRYABLE_HTTP
+    return False
+
+
+def fetch(call, data_key='features', attempts=3, delay=1.0, sleep=None):
+    """Run `call()`, classify what came back, and retry transient failures.
+
+    `call` takes no arguments and either returns a response or raises, so the
+    caller keeps full control of the URL, params, headers and timeout and this
+    function stays ignorant of them.
+
+    Returns (status, detail, rows, tries). `tries` is what makes the retry
+    measurable instead of assumed: OutcomeCounter uses it to report how many
+    queries only succeeded on a second attempt, so a run can show whether the
+    retry is earning its wall-clock time.
+
+    `sleep` is injected so a test can assert the backoff schedule without
+    waiting for it. It defaults to None rather than to `time.sleep` because a
+    default argument binds at definition time and could not then be patched.
+    """
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts!r}")
+    # Resolved HERE, not as a default argument. A default binds at
+    # definition time, so `sleep=time.sleep` in the signature cannot be
+    # patched by a test and the suite pays the real backoff on every
+    # transport-failure fixture.
+    if sleep is None:
+        sleep = time.sleep
+
+    status, detail, rows = BAD_JSON, 'no attempt was made', []
+    for tries in range(1, attempts + 1):
+        response = None
+        try:
+            response = call()
+            status, detail, rows = classify_response(response, data_key=data_key)
+        except Exception as e:
+            status, detail, rows = classify_exception(e)
+
+        if status in (OK, EMPTY) or not is_retryable(status, response):
+            return status, detail, rows, tries
+        if tries < attempts:
+            # Exponential: 1x, 2x, 4x. A 504 under load is not helped by
+            # hammering it on a fixed interval.
+            sleep(delay * (2 ** (tries - 1)))
+
+    if attempts > 1:
+        detail = f"{detail} (after {attempts} attempts)"
+    return status, detail, rows, attempts
 
 
 def classify_response(response, data_key='features'):
@@ -130,11 +202,22 @@ class OutcomeCounter:
         self.label = label
         self.counts = {s: 0 for s in self.ORDER}
         self.first_detail = {}
+        #: Queries that took more than one attempt, and the subset of those
+        #: that then succeeded. Without the second number a retry is an
+        #: assumption; with it, a run says what the retry bought.
+        self.retried = 0
+        self.recovered = 0
 
-    def record(self, status, detail=''):
+    def record(self, status, detail='', tries=1):
         if status not in self.counts:
             raise ValueError(f"unknown status {status!r}")
+        if tries < 1:
+            raise ValueError(f"tries must be at least 1, got {tries!r}")
         self.counts[status] += 1
+        if tries > 1:
+            self.retried += 1
+            if status in (OK, EMPTY):
+                self.recovered += 1
         # Keep the first NON-EMPTY example of each failure, which is the one
         # that shows what went wrong before any retry or rate limit muddies
         # it. "Non-empty" rather than "first" on purpose: record() defaults
@@ -182,6 +265,9 @@ class OutcomeCounter:
             out.append(f"  [WARN] {self.failed} of {self.total} {self.label} queries "
                        f"failed, so the counts above understate coverage by an "
                        f"unknown amount.")
+        if self.retried:
+            out.append(f"    {self.recovered} of {self.retried} retried "
+                       f"{self.label} queries recovered on a later attempt")
         return out
 
     def report(self, printer=print):
