@@ -1,5 +1,5 @@
 """
-score_and_export_al.py
+score_and_export.py
 Scores each filtered West Virginia candidate 0–120 across seven dimensions and exports
 the top 1,000 (or all survivors if fewer) as CSV + GeoJSON.
 
@@ -25,6 +25,7 @@ import geopandas as gpd
 import requests
 from pathlib import Path
 from shapely.strtree import STRtree
+from states import resolve
 
 # ---------------------------------------------------------------------------
 # Config
@@ -43,6 +44,14 @@ MIN_SCORE      = 28
 URBAN_MIN_ALAND_M2 = 200_000_000
 
 AL_RAW = ROOT / "data" / "westvirginia" / "raw"
+
+# Which state this run scores, and the two values derived from it that used to
+# be typed by hand. SCORED_STATE is resolved rather than hardcoded so the
+# Census file paths and the printed heading cannot disagree with each other or
+# with the registry.
+SCORED_STATE = resolve.single_selected("score_and_export.py")
+SCORED_STATE_FIPS = resolve.require_fips(SCORED_STATE)
+SCORED_STATE_NAME = resolve.state_names([SCORED_STATE])[SCORED_STATE].replace("_", " ")
 
 # ---------------------------------------------------------------------------
 # Scoring tables (same as TX except STATE_SCORE)
@@ -111,8 +120,15 @@ BROWNFIELD_SCORE = {
     "Other":                  5,
 }
 
-# Tennessee is an emerging market — low power costs (Tennessee Power/TVA),
-# strong state incentives, growing interest from hyperscalers
+# Market tiers. The comment here used to describe Tennessee's market, which
+# is the fork's lineage rather than this repo's subject; the per-state
+# reasoning now sits beside each entry.
+#
+# NOT migrated to the registry, deliberately: GA, NC and OH have no registry
+# entry, and the consumer is `.map(STATE_SCORE).fillna(0)`, so moving this
+# would silently score any GA site 0 on the state axis. See the
+# "WHAT IS DELIBERATELY NOT MIGRATED" note in states/resolve.py, which
+# tests/test_resolve.py pins.
 STATE_SCORE = {
     "VA": 20,
     "TX": 18,
@@ -647,7 +663,14 @@ else:
 # ---------------------------------------------------------------------------
 print("\nChecking Opportunity Zone eligibility …")
 oz_csv   = AL_RAW / "opportunity_zones" / "oz_designations.csv"
-tract_zip = AL_RAW / "opportunity_zones" / "tl_2023_47_tract.zip"
+# DERIVED, not typed. This literal said tl_2023_47_tract.zip until
+# 2026-10-26: 47 is Tennessee, the state this repo was forked from, while
+# download_westvirginia.py has always written tl_2023_54_tract.zip. The
+# consumer guards on exists(), so the mismatch printed "[skip] Opportunity
+# Zone data not found" and scored every WV site 0 of 5 on this axis, for as
+# long as the fork has existed.
+tract_zip = (AL_RAW / "opportunity_zones"
+             / f"tl_2023_{SCORED_STATE_FIPS}_tract.zip")
 tract_dir = AL_RAW / "opportunity_zones" / "tracts"
 
 if oz_csv.exists() and tract_zip.exists():
@@ -680,8 +703,15 @@ if oz_csv.exists() and tract_zip.exists():
         print(f"  [WARN] OZ enrichment failed: {e}")
         gdf["opportunity_zone"] = False
 else:
+    # Naming the paths matters: the previous message said the DATA was
+    # missing, which is what let a wrong filename read as a missing download
+    # for the life of the fork.
+    missing = [str(p.relative_to(ROOT)) for p in (oz_csv, tract_zip) if not p.exists()]
     gdf["opportunity_zone"] = False
-    print("  [skip] Opportunity Zone data not found")
+    print(f"  [skip] Opportunity Zone scoring disabled; not on disk: "
+          f"{', '.join(missing)}")
+    print(f"         Every site therefore scores 0 of 5 on this axis. That is "
+          f"a missing input, not a finding that no site is in a zone.")
 
 # ---------------------------------------------------------------------------
 # FEMA Flood Zone (NFIP)
@@ -1071,7 +1101,7 @@ print(f"\n{len(above_threshold)} candidates score ≥{MIN_SCORE}; "
 # Results table
 # ---------------------------------------------------------------------------
 print("\n" + "=" * 60)
-print("RANKED CANDIDATES — TENNESSEE")
+print(f"RANKED CANDIDATES — {SCORED_STATE_NAME.upper()}")
 print("=" * 60)
 
 display_cols = [
