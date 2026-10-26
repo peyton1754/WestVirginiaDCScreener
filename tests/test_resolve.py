@@ -277,8 +277,10 @@ def test_the_acreage_field_records_where_it_came_from():
         'parcels.statewide_service.acres')
     assert source, "the acreage field name has no recorded source"
     assert '40276191635' in source, "the source must name the run that established it"
-    assert 'NOT yet confirmed' in source or 'not yet confirmed' in source.lower(), (
-        "the source must still carry the open question about the unit")
+    assert 'UNIT CONFIRMED' in source, (
+        "the source must record that the unit question was settled, and how")
+    assert '40378766799' in source, (
+        "the confirmation must name the run that established it")
 
 
 def test_county_overrides_reproduces_the_literal():
