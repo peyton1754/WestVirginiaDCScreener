@@ -1,5 +1,5 @@
 """
-build_candidates_al.py
+build_candidates.py
 Builds the candidate site pool for West Virginia from six sources:
   1. EIA Form 860 retired generators (power plants ≥50 MW)
   2. EPA FRS manufacturing facilities (paper, steel, chemicals, refineries)
@@ -25,6 +25,7 @@ from pathlib import Path
 from shapely.geometry import Point
 from shapely.strtree import STRtree
 from states import resolve
+import source_probe
 
 # ---------------------------------------------------------------------------
 # Config
@@ -844,27 +845,60 @@ SRP_URL = (
 
 redev_gdf = gpd.GeoDataFrame(geometry=gpd.GeoSeries([], crs=TARGET_CRS))
 
+# A zero-row cache is not trusted. Until 2026-10-26 a failed fetch wrote one,
+# and every run afterwards loaded it, printed "Loaded 0 sites from cache" and
+# skipped the source -- so one transient failure disabled an input
+# permanently and the symptom read like a successful cache hit. Any such file
+# still on disk is re-fetched rather than believed.
+_srp_cache_usable = False
+if SRP_CACHE.exists():
+    srp_raw = pd.read_csv(SRP_CACHE, low_memory=False)
+    if len(srp_raw) > 0:
+        _srp_cache_usable = True
+        print(f"  Loaded {len(srp_raw):,} sites from cache")
+    else:
+        print(f"  [WARN] {SRP_CACHE.name} holds zero rows. A zero-row cache is "
+              f"what a failed download used to leave behind, so it is being "
+              f"re-fetched rather than read as 'this state has no sites'.")
+
 try:
-    if not SRP_CACHE.exists():
+    if not _srp_cache_usable:
         SRP_CACHE.parent.mkdir(parents=True, exist_ok=True)
         import requests as _req_srp
-        print("  Downloading EPA Redevelopment Mapper brownfields …")
+        print("  Downloading EPA Redevelopment Mapper brownfields ...")
+        srp_outcomes = source_probe.OutcomeCounter("EPA Redevelopment Mapper")
         all_feats = []
         for state in TARGET_STATES:
-            resp = _req_srp.get(SRP_URL, params={
-                "where": f"State='{state}'",
-                "outFields": "*",
-                "f": "json",
-            }, timeout=30)
-            resp.raise_for_status()
-            feats = resp.json().get("features", [])
+            # Through source_probe, because raise_for_status() cannot see an
+            # ArcGIS error delivered with HTTP 200, which is the shape that
+            # hid the 2026-10-26 parcel outage for two weeks.
+            status, detail, feats, tries = source_probe.fetch(
+                lambda state=state: _req_srp.get(SRP_URL, params={
+                    "where": f"State='{state}'",
+                    "outFields": "*",
+                    "f": "json",
+                }, timeout=30),
+                attempts=3)
+            srp_outcomes.record(status, detail, tries)
+            if status in source_probe.FAILURES:
+                print(f"    [FAIL] {state}: {status}: {detail}")
+                continue
             all_feats.extend(f["attributes"] for f in feats)
+
+        srp_outcomes.report()
         srp_raw = pd.DataFrame(all_feats)
+
+        if srp_outcomes.failed:
+            # NOT cached. Writing this frame would be writing the outage to
+            # disk, and the next run would read it as an answer.
+            raise RuntimeError(
+                f"{srp_outcomes.failed} of {srp_outcomes.total} Redevelopment "
+                f"Mapper queries failed, so the {len(srp_raw):,} rows gathered "
+                f"are a partial result and are NOT being cached. Re-run to "
+                f"retry; the cache is only written when every state answers.")
+
         srp_raw.to_csv(SRP_CACHE, index=False)
-        print(f"  Downloaded {len(srp_raw):,} sites (>100 acres) → {SRP_CACHE.name}")
-    else:
-        srp_raw = pd.read_csv(SRP_CACHE, low_memory=False)
-        print(f"  Loaded {len(srp_raw):,} sites from cache")
+        print(f"  Downloaded {len(srp_raw):,} sites (>100 acres) -> {SRP_CACHE.name}")
 
     if len(srp_raw) > 0:
         srp_raw = srp_raw.dropna(subset=["Latitude", "Longitude"])
@@ -942,7 +976,16 @@ try:
         print("  No sites returned for target state(s).")
 
 except Exception as _e_srp:
-    print(f"  [warn] Redevelopment Mapper source failed: {_e_srp}")
+    # [FAIL], not [warn]. This is one of the six candidate sources, and
+    # enrich_columns.py section 4b uses its Property_Size to override parcel
+    # acreage on the stated grounds that a professionally assessed brownfield
+    # boundary beats a parcel point query. Losing it silently understates
+    # acreage across the portfolio, which feeds score_parcel.
+    print(f"  [FAIL] Redevelopment Mapper source unavailable: "
+          f"{type(_e_srp).__name__}: {_e_srp}")
+    print(f"  [WARN] This run has NO Redevelopment Mapper candidates and no "
+          f"EPA acreage override. That is a missing source, not a finding "
+          f"that no large brownfield exists.")
 
 
 # ---------------------------------------------------------------------------
