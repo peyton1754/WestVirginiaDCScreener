@@ -161,8 +161,13 @@ class OutcomeCounter:
 
     def lines(self):
         """Render the summary as a list of lines, ready to print."""
+        # "returned rows", not "with parcels". This counter guards three
+        # different services, and the 2026-10-26 run printed
+        # "USGS WBD watershed service: 27 queries, 27 with parcels", which is
+        # nonsense for a watershed lookup and for a soil lookup. A summary
+        # whose own label is wrong is the thing this module exists to prevent.
         out = [f"  {self.label}: {self.total} queries, "
-               f"{self.counts[OK]} with parcels, {self.counts[EMPTY]} genuinely empty, "
+               f"{self.counts[OK]} returned rows, {self.counts[EMPTY]} genuinely empty, "
                f"{self.failed} FAILED"]
         for s in FAILURES:
             if self.counts[s]:

@@ -169,7 +169,10 @@ def test_counter_is_quiet_when_nothing_failed():
     # The summary line always ends "0 FAILED", so match the bracketed markers
     # rather than the bare word.
     assert '[FAIL]' not in text and '[WARN]' not in text
-    assert '10 with parcels' in text
+    assert '10 returned rows' in text
+    # Not 'with parcels': this counter also guards a watershed lookup
+    # and a soil lookup, where that label is nonsense.
+    assert 'parcel' not in text.lower()
     assert '0 FAILED' in text
 
 

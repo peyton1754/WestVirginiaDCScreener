@@ -136,8 +136,17 @@ def resolve_out_fields(configured, available):
     return ','.join(ordered), resolved, missing
 
 
-def report_lines(label, status, detail, out_fields, resolved, missing):
-    """Render what the preflight established, for the run log."""
+def report_lines(label, status, detail, out_fields, resolved, missing,
+                 available=None):
+    """Render what the preflight established, for the run log.
+
+    `available` is the layer's full field list. It is printed WHENEVER a
+    configured field is missing, because without it the run tells you a field
+    is gone but not what replaced it, which costs a whole extra run to find
+    out. That happened on 2026-10-26: the preflight correctly reported that
+    Acres_C no longer exists, the owner data came back, and the acreage stayed
+    empty because nobody could see that the layer now calls it something else.
+    """
     out = []
     if status != source_probe.OK:
         out.append(f"  [FAIL] {label} metadata unavailable ({status}): {detail}")
@@ -153,6 +162,18 @@ def report_lines(label, status, detail, out_fields, resolved, missing):
         out.append(f"  [WARN] This is the documented cause of this service's "
                    f"'Failed to execute query' error. Update the registry's "
                    f"parcels.statewide_service to the layer's current names.")
+        if available:
+            out.append(f"  The layer's {len(available)} actual field(s), so the "
+                       f"replacement can be picked without another run:")
+            # Wrapped rather than one per line: 21 fields is a wall of log.
+            row = []
+            for name in available:
+                row.append(name)
+                if len(row) == 6:
+                    out.append('    ' + ', '.join(row))
+                    row = []
+            if row:
+                out.append('    ' + ', '.join(row))
     renamed = {k: v for k, v in (resolved or {}).items() if k != v}
     if renamed:
         pairs = ', '.join(f"{k} -> {v}" for k, v in renamed.items())
