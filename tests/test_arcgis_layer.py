@@ -198,6 +198,41 @@ def test_a_missing_field_is_reported_loudly_and_names_the_remedy():
     assert 'statewide_service' in text, "must say where to fix it"
 
 
+def test_a_missing_field_prints_the_layers_actual_fields():
+    """Without this the run says a field is gone but not what replaced it,
+    which costs a whole extra run. Measured on 2026-10-26: the preflight
+    correctly reported that Acres_C no longer exists, the owner data came
+    back, and the acreage stayed empty because nobody could see that the
+    layer now calls it something else."""
+    available = ['OBJECTID', 'FullOwnerName', 'GIS_ACRES', 'TAXYEAR',
+                 'PARCELID', 'Shape__Area', 'Shape__Length']
+    out, resolved, missing = al.resolve_out_fields(CONFIGURED, available)
+    text = '\n'.join(al.report_lines('WVGIS parcels', sp.OK, '7 fields',
+                                     out, resolved, missing, available=available))
+    assert 'Acres_C' in text, "the missing field must still be named"
+    for name in available:
+        assert name in text, f"the layer's field {name} is not listed"
+    assert '7 actual field' in text
+
+
+def test_the_field_list_is_only_printed_when_something_is_missing():
+    """A clean preflight listing 21 field names every run is log noise."""
+    available = ['FullOwnerName', 'Acres_C', 'OBJECTID']
+    out, resolved, missing = al.resolve_out_fields(CONFIGURED, available)
+    text = '\n'.join(al.report_lines('WVGIS parcels', sp.OK, '3 fields',
+                                     out, resolved, missing, available=available))
+    assert missing == []
+    assert 'OBJECTID' not in text, "field list printed with nothing missing"
+
+
+def test_the_field_list_is_optional_so_existing_callers_still_work():
+    out, resolved, missing = al.resolve_out_fields(CONFIGURED, ['FullOwnerName'])
+    text = '\n'.join(al.report_lines('WVGIS parcels', sp.OK, '1 fields',
+                                     out, resolved, missing))
+    assert 'Acres_C' in text
+    assert 'actual field' not in text
+
+
 def test_unavailable_metadata_reports_the_fallback():
     text = '\n'.join(al.report_lines('WVGIS parcels', sp.HTTP_ERROR,
                                      'layer metadata: HTTP 404',

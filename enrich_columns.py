@@ -191,7 +191,7 @@ if STATEWIDE_SVC:
         _PARCEL_FIELDS, _layer_fields)
     for _line in arcgis_layer.report_lines(
             "WVGIS statewide parcel layer", _meta_status, _meta_detail,
-            PARCEL_OUT_FIELDS, _resolved, _missing):
+            PARCEL_OUT_FIELDS, _resolved, _missing, available=_layer_fields):
         print(_line)
 else:
     PARCEL_OUT_FIELDS = arcgis_layer.ALL_FIELDS
