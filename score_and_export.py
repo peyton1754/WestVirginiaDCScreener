@@ -3,16 +3,22 @@ score_and_export.py
 Scores each filtered West Virginia candidate 0–120 across seven dimensions and exports
 the top 1,000 (or all survivors if fewer) as CSV + GeoJSON.
 
-Scoring rubric (120 pts total):
+Scoring rubric (100 pts total):
   Gas pipeline        20 pts  — distance to interstate/intrastate pipeline (BTM generation)
   Brownfield type     20 pts  — site type indicates scale and infrastructure
   Substation voltage  15 pts  — nearest substation kV (grid interconnect capacity)
-  State tier          20 pts  — DC market maturity & policy environment
   Tx redundancy       10 pts  — count of 230kV+ lines within 5 miles
   Water access        10 pts  — named water source on record
   Labor/metro         10 pts  — distance to nearest large urban area (EPSG:5070)
   Utility rate        10 pts  — industrial ¢/kWh from EIA 861 (lower = better)
   Parcel acreage       5 pts  — confirmed acreage (neutral if unknown)
+
+NOT an axis, as of 2026-10-26: the state tier, which was 20 pts. It is a
+constant within a single-state run, it was scaled per site by the retirement
+multiplier so it moved ranks anyway, it partly double-counted the utility
+rate and fiber axes, and its values were never sourced. It is still emitted
+as `state_tier_reference` for whoever builds a real cross-state comparison.
+See STATE_SCORE below.
 
 Output:
   outputs/csv/top_candidates_wv.csv
@@ -40,7 +46,12 @@ OUT_GJ.mkdir(parents=True, exist_ok=True)
 
 CRS          = "EPSG:5070"
 TOP_N          = 1000
-MIN_SCORE      = 28
+#: Rescaled from 28 when the state tier left the rubric, keeping the same
+#: fraction of the maximum: 28 of 120 is 23.33 of 100. It carried no comment
+#: and no stated calibration, so the fraction is preserved rather than the
+#: number re-picked. Measured on the 16 rows then on file: every one passes
+#: either threshold, so this changed no row on the day it was made.
+MIN_SCORE      = 23
 URBAN_MIN_ALAND_M2 = 200_000_000
 
 AL_RAW = ROOT / "data" / "westvirginia" / "raw"
@@ -120,15 +131,37 @@ BROWNFIELD_SCORE = {
     "Other":                  5,
 }
 
-# Market tiers. The comment here used to describe Tennessee's market, which
-# is the fork's lineage rather than this repo's subject; the per-state
-# reasoning now sits beside each entry.
+# A REFERENCE table, not a scored axis. Removed from the per-site score on
+# 2026-10-26 (Peyton) for six measured reasons, recorded here because the
+# numbers below still look authoritative and are not:
+#
+#   1. It was 20 of 120 points, tied for the largest axis.
+#   2. Within a single-state run it is a CONSTANT: every West Virginia row
+#      carried 11.
+#   3. It still moved ranks, because total = infra x retirement_multiplier,
+#      so the constant was scaled per site (11.0 at a 1.00 multiplier, 7.7
+#      at 0.70). Dropping it moved 5 of 16 rank positions. An invented
+#      number was being scaled by a measured one.
+#   4. It partly double-counted: these entries cited power cost in cents per
+#      kWh, which score_utility_rate derives per county from EIA 861, and
+#      fiber, which score_fiber derives from FCC Form 477.
+#   5. No value here is sourced. Every registry state records
+#      notes.sources for `fips`; not one records one for `state_score`.
+#   6. It bought no cross-state comparability. The ten-state map reads
+#      total_score per state, but nine of ten are frozen extracts from
+#      separate forks under another account, and three Louisiana sites score
+#      above this rubric's own 120-point ceiling. The scales were never
+#      common, so this normalised nothing.
+#
+# Kept, and still emitted as `state_tier_reference`, so a real cross-state
+# comparison can be built later without re-deriving the intent. A tier used
+# that way belongs at the portfolio level, applied once per state, not added
+# to each site and then multiplied by that site's retirement confidence.
 #
 # NOT migrated to the registry, deliberately: GA, NC and OH have no registry
 # entry, and the consumer is `.map(STATE_SCORE).fillna(0)`, so moving this
-# would silently score any GA site 0 on the state axis. See the
-# "WHAT IS DELIBERATELY NOT MIGRATED" note in states/resolve.py, which
-# tests/test_resolve.py pins.
+# would silently give any GA site 0. See the "WHAT IS DELIBERATELY NOT
+# MIGRATED" note in states/resolve.py, which tests/test_resolve.py pins.
 STATE_SCORE = {
     "VA": 20,
     "TX": 18,
@@ -834,7 +867,10 @@ gdf["score_gas"]          = gdf["dist_to_pipeline_mi"].apply(score_gas_pipeline)
 gdf["score_substation"]   = gdf["nearest_sub_kv"].apply(score_substation_kv)
 gdf["score_tx_redundancy"]= gdf["tx_lines_5mi"].apply(score_tx_redundancy)
 gdf["score_brownfield"]   = gdf["brownfield_type"].map(BROWNFIELD_SCORE).fillna(5)
-gdf["score_state"]        = gdf["State"].map(STATE_SCORE).fillna(0)
+# Emitted, NOT summed. Named `state_tier_reference` rather than
+# `score_state` so that a reader, a spreadsheet or a downstream extractor
+# cannot mistake it for one of the scored axes.
+gdf["state_tier_reference"] = gdf["State"].map(STATE_SCORE).fillna(0)
 gdf["score_parcel"]       = gdf["parcel_acres"].apply(score_parcel)
 gdf["score_water"]        = gdf.apply(
                                 lambda r: score_water(r.get("dist_to_water_mi"),
@@ -925,7 +961,6 @@ infra_score = (
     + gdf["score_substation"]
     + gdf["score_tx_redundancy"]
     + gdf["score_brownfield"]
-    + gdf["score_state"]
     + gdf["score_parcel"]
     + gdf["score_water"]
     + gdf["score_metro"]
@@ -1209,7 +1244,7 @@ display_cols = [
     "dist_to_sub_mi", "tx_lines_5mi", "nearest_metro", "dist_to_metro_mi",
     "parcel_acres", "total_score",
     "score_gas", "score_substation", "score_tx_redundancy",
-    "score_brownfield", "score_state", "score_parcel",
+    "score_brownfield", "score_parcel",
     "score_water", "score_metro", "score_utility_rate", "score_air_permit",
     "score_fiber", "fiber_max_speed_mbps",
     "score_opportunity_zone", "opportunity_zone",
@@ -1225,7 +1260,7 @@ print(top[display_cols].to_string())
 
 print("\n--- Score breakdown ---")
 print(f"{'Rank':<5} {'Plant':<35} {'Score':>6}  "
-      f"{'Gas':>5} {'Sub':>5} {'TxN':>4} {'BF':>4} {'St':>4} "
+      f"{'Gas':>5} {'Sub':>5} {'TxN':>4} {'BF':>4} "
       f"{'H2O':>4} {'Metro':>5} {'Rate':>5} {'Prcl':>5} {'Air':>4} {'Fbr':>4} {'Acres':>7}  {'PipeDist':>9} {'SubKV':>6} {'Lines':>6}")
 print("-" * 133)
 for rank, row in top[display_cols].iterrows():
@@ -1237,7 +1272,6 @@ for rank, row in top[display_cols].iterrows():
         f"{rank:<5} {str(row['Plant_Name']):<35} {row['total_score']:>6.1f}  "
         f"{row.get('score_gas',0):>5.1f} {row.get('score_substation',0):>5.1f} "
         f"{row.get('score_tx_redundancy',0):>4.1f} {row.get('score_brownfield',0):>4.0f} "
-        f"{row.get('score_state',0):>4.0f} "
         f"{row.get('score_water',0):>4.0f} {row.get('score_metro',0):>5.1f} "
         f"{row.get('score_utility_rate',0):>5.1f} {row.get('score_parcel',0):>5.1f} "
         f"{row.get('score_air_permit',0):>4.0f} {row.get('score_fiber',0):>4.0f} {acres:>7}  "
@@ -1276,7 +1310,7 @@ EXPORT_COLS = [
     "has_air_permit",
     "total_score",
     "score_gas", "score_substation", "score_tx_redundancy",
-    "score_brownfield", "score_state",
+    "score_brownfield", "state_tier_reference",
     "score_water", "score_metro", "score_utility_rate", "score_parcel",
     "score_air_permit", "score_fiber", "score_opportunity_zone", "score_flood_risk",
     "score_seismic",

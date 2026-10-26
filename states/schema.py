@@ -49,7 +49,12 @@ import re
 REGISTRY_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'registry')
 
 # Needed before the pipeline can screen this state at all.
-REQUIRED = ('abbr', 'name', 'nhd_name', 'fips', 'bbox', 'state_score')
+#: state_score left this list on 2026-10-26, when the state tier stopped
+#: being a scored axis. It was the ONLY thing holding AL, KY, LA, MS and ND
+#: at `declared`, which resolve.selected() refuses, so an unsourced
+#: hand-typed opinion was the single gate keeping five states out of the
+#: pipeline. It is still validated as a number or null where present.
+REQUIRED = ('abbr', 'name', 'nhd_name', 'fips', 'bbox')
 
 # Needed only by the parcel-acreage enrichment and the adjacent-land step.
 # A state missing this is PARTIAL, not broken.
