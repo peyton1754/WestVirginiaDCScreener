@@ -26,7 +26,8 @@ import pandas as pd
 import geopandas as gpd
 from pathlib import Path
 from states import resolve
-import parcel_probe
+import source_probe
+import arcgis_layer
 
 warnings.filterwarnings("ignore")
 
@@ -66,6 +67,9 @@ needs_basin = cands["water_basin"].astype(str).str.strip().isin(["", "nan"]) | c
 print(f"  {needs_basin.sum()} sites need water basin")
 
 n_wbd = 0
+# Separates "this site is in no mapped basin" from "the USGS service
+# never answered". Both used to print as an unfilled row.
+wbd_outcomes = source_probe.OutcomeCounter("USGS WBD watershed service")
 for i in range(len(cands)):
     if not needs_basin.iloc[i]:
         continue
@@ -80,18 +84,24 @@ for i in range(len(cands)):
             "returnGeometry": "false",
             "f": "json",
         }, headers=HEADERS, timeout=15)
-        if r.status_code == 200:
-            feats = r.json().get("features", [])
-            if feats:
-                name = feats[0]["attributes"].get("name", "")
-                huc  = feats[0]["attributes"].get("huc8", "")
-                cands.at[cands.index[i], "water_basin"] = f"{name} (HUC8: {huc})"
-                n_wbd += 1
-    except Exception:
-        pass
+        status, detail, feats = source_probe.classify_response(r)
+    except Exception as e:
+        status, detail, feats = source_probe.classify_exception(e)
+    wbd_outcomes.record(status, detail)
+    if status == source_probe.OK:
+        try:
+            name = feats[0]["attributes"].get("name", "")
+            huc  = feats[0]["attributes"].get("huc8", "")
+            cands.at[cands.index[i], "water_basin"] = f"{name} (HUC8: {huc})"
+            n_wbd += 1
+        except Exception as e:
+            wbd_outcomes.counts[source_probe.OK] -= 1
+            wbd_outcomes.record(source_probe.BAD_JSON,
+                                f"{type(e).__name__} reading basin attributes: {e}")
     time.sleep(0.2)
 
 print(f"  Filled: {n_wbd}/{needs_basin.sum()}")
+wbd_outcomes.report()
 
 
 # ===================================================================
@@ -163,10 +173,35 @@ STATEWIDE_SVC = resolve.statewide_service(
 
 COUNTY_SERVICES = {}
 
-def query_parcel_svc(svc, lon, lat):
-    out_fields = ",".join(f for f in [
-        svc.get("owner"), svc.get("acres"), svc.get("value"), svc.get("imp"),
-    ] if f)
+# PREFLIGHT, added 2026-10-26 after every one of 25 parcel queries came
+# back as HTTP 200 carrying {"code": 400, "message": "Failed to execute
+# query."}. The comment below records that an outField this layer does
+# not have produces exactly that error, and the field names in the
+# registry were last confirmed against the live service in July. So the
+# layer is asked what it actually has, once, before any site is queried.
+# If a configured field is gone it is named and dropped; if the metadata
+# call itself fails the query falls back to outFields=*, which cannot
+# name a field the layer lacks.
+_PARCEL_FIELDS = [STATEWIDE_SVC.get(k) for k in ("owner", "acres", "value", "imp")] \
+    if STATEWIDE_SVC else []
+if STATEWIDE_SVC:
+    _meta_status, _meta_detail, _layer_fields = arcgis_layer.describe(
+        STATEWIDE_SVC["url"], requests, headers=HEADERS, timeout=15, verify=False)
+    PARCEL_OUT_FIELDS, _resolved, _missing = arcgis_layer.resolve_out_fields(
+        _PARCEL_FIELDS, _layer_fields)
+    for _line in arcgis_layer.report_lines(
+            "WVGIS statewide parcel layer", _meta_status, _meta_detail,
+            PARCEL_OUT_FIELDS, _resolved, _missing):
+        print(_line)
+else:
+    PARCEL_OUT_FIELDS = arcgis_layer.ALL_FIELDS
+
+
+def query_parcel_svc(svc, lon, lat, out_fields=None):
+    # Defaults to what the preflight established, rather than to the
+    # configured names, because sending a name the layer does not have is
+    # the one request shape this service is documented to reject.
+    out_fields = PARCEL_OUT_FIELDS if out_fields is None else out_fields
     # WVGIS's WV_Parcels service errors out entirely (400 "Failed to execute
     # query") on point+distance queries AND on an unrecognized "Shape__Area"
     # outField — both verified live. It only accepts an envelope with just
@@ -189,11 +224,11 @@ def query_parcel_svc(svc, lon, lat):
             "f": "json",
         }, headers=HEADERS, timeout=15, verify=False)
     except Exception as e:
-        status, detail, _ = parcel_probe.classify_exception(e)
+        status, detail, _ = source_probe.classify_exception(e)
         return None, None, None, status, detail
 
-    status, detail, feats = parcel_probe.classify_response(r)
-    if status != parcel_probe.OK:
+    status, detail, feats = source_probe.classify_response(r)
+    if status != source_probe.OK:
         return None, None, None, status, detail
 
     # Parsing is OUTSIDE the request's try on purpose. It used to sit
@@ -202,22 +237,34 @@ def query_parcel_svc(svc, lon, lat):
     # transport failure. The service had answered; it was the SHAPE
     # that was wrong, which is bad_json.
     try:
+        # Attribute keys are matched case-insensitively. outFields now
+        # carries the LAYER's spelling, which may differ in case from the
+        # registry's, and with outFields=* the keys are whatever the layer
+        # calls them. Matching exactly would silently read None.
+        def _attr(attrs, field):
+            if not field:
+                return None
+            if field in attrs:
+                return attrs[field]
+            lowered = {str(k).lower(): v for k, v in attrs.items()}
+            return lowered.get(str(field).lower())
+
         acres_field = svc.get("acres", "")
         owner_field = svc.get("owner", "")
         # Pick largest parcel
-        best = max(feats, key=lambda f: float(f["attributes"].get(acres_field, 0) or 0))
+        best = max(feats, key=lambda f: float(_attr(f["attributes"], acres_field) or 0))
         a = best["attributes"]
-        acres = float(a.get(acres_field, 0) or 0) or None
-        owner = str(a.get(owner_field, "")).strip() if owner_field else None
-        imp   = float(a.get(svc.get("imp", ""), 0) or 0) or None
+        acres = float(_attr(a, acres_field) or 0) or None
+        owner = str(_attr(a, owner_field) or "").strip() if owner_field else None
+        imp   = float(_attr(a, svc.get("imp", "")) or 0) or None
     except Exception as e:
-        return (None, None, None, parcel_probe.BAD_JSON,
+        return (None, None, None, source_probe.BAD_JSON,
                 f"{type(e).__name__} reading parcel attributes: {e}")
-    return owner, acres, imp, parcel_probe.OK, detail
+    return owner, acres, imp, source_probe.OK, detail
 
 n_cty = 0
-statewide_outcomes = parcel_probe.OutcomeCounter("WVGIS statewide parcel service")
-county_outcomes = parcel_probe.OutcomeCounter("county GIS parcel services")
+statewide_outcomes = source_probe.OutcomeCounter("WVGIS statewide parcel service")
+county_outcomes = source_probe.OutcomeCounter("county GIS parcel services")
 for i in range(len(cands)):
     county = str(cands.iloc[i].get("County", "")).upper().strip().replace(" COUNTY", "")
     pt = cands_wgs.geometry.iloc[i]
@@ -234,7 +281,7 @@ for i in range(len(cands)):
     if owner:
         cands.at[cands.index[i], "current_owner"] = owner
         cands.at[cands.index[i], "owner_source"] = source
-    elif status in parcel_probe.FAILURES:
+    elif status in source_probe.FAILURES:
         # The distinction this module computes has to survive to disk.
         # Without this a failed query and a site with genuinely no
         # parcel are identical in top_candidates_wv.csv (blank owner,
@@ -421,6 +468,9 @@ needs_soil = (cands["soil_drainage"].astype(str).str.strip().isin(["", "nan"]) |
 print(f"  {needs_soil.sum()} sites need soil drainage")
 
 n_soil = 0
+# Separates "no SSURGO component here" from "the Soil Data Access
+# endpoint never answered".
+soil_outcomes = source_probe.OutcomeCounter("USDA SSURGO soil service")
 for i in range(len(cands)):
     if not needs_soil.iloc[i]:
         continue
@@ -435,18 +485,25 @@ for i in range(len(cands)):
     """
     try:
         r = requests.post(SSURGO_URL, json={"query": query, "format": "JSON"}, timeout=20)
-        if r.status_code == 200:
-            rows = r.json().get("Table", [])
-            if rows:
-                cands.at[cands.index[i], "soil_type"]     = str(rows[0][0] or "")
-                cands.at[cands.index[i], "soil_drainage"]  = str(rows[0][1] or "")
-                cands.at[cands.index[i], "soil_hydric"]    = str(rows[0][2] or "")
-                n_soil += 1
-    except Exception:
-        pass
+        # SSURGO returns its rows under "Table", not "features".
+        status, detail, rows = source_probe.classify_response(r, data_key="Table")
+    except Exception as e:
+        status, detail, rows = source_probe.classify_exception(e)
+    soil_outcomes.record(status, detail)
+    if status == source_probe.OK:
+        try:
+            cands.at[cands.index[i], "soil_type"]     = str(rows[0][0] or "")
+            cands.at[cands.index[i], "soil_drainage"]  = str(rows[0][1] or "")
+            cands.at[cands.index[i], "soil_hydric"]    = str(rows[0][2] or "")
+            n_soil += 1
+        except Exception as e:
+            soil_outcomes.counts[source_probe.OK] -= 1
+            soil_outcomes.record(source_probe.BAD_JSON,
+                                 f"{type(e).__name__} reading soil row: {e}")
     time.sleep(0.3)
 
 print(f"  Filled: {n_soil}/{needs_soil.sum()}")
+soil_outcomes.report()
 
 
 # ===================================================================

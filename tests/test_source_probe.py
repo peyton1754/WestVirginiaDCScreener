@@ -1,5 +1,5 @@
 """
-Tests for parcel_probe.
+Tests for source_probe.
 
 The fixtures are built from the shapes this service actually returns, not from
 shapes invented to pass. The two that matter, and that the old code could not
@@ -15,7 +15,7 @@ import pytest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-import parcel_probe as pp  # noqa: E402
+import source_probe as pp  # noqa: E402
 
 
 class FakeResponse:
@@ -41,7 +41,7 @@ def test_a_real_result_is_ok():
     status, detail, feats = pp.classify_response(r)
     assert status == pp.OK
     assert len(feats) == 1
-    assert '1 parcel' in detail
+    assert '1 row' in detail
 
 
 def test_a_genuine_empty_is_empty_not_a_failure():

@@ -51,12 +51,18 @@ TRANSPORT_ERROR = 'transport_error'  # timeout, DNS, TLS, connection reset
 FAILURES = (HTTP_ERROR, SERVICE_ERROR, BAD_JSON, TRANSPORT_ERROR)
 
 
-def classify_response(response):
-    """Classify a parcel-service HTTP response.
+def classify_response(response, data_key='features'):
+    """Classify a JSON-over-HTTP data response.
 
-    Returns (status, detail, features). `features` is a list only for OK;
-    it is empty for every other status, so a caller that ignores the status
-    still cannot mistake a failure for data.
+    Returns (status, detail, rows). `rows` is a list only for OK; it is empty
+    for every other status, so a caller that ignores the status still cannot
+    mistake a failure for data.
+
+    `data_key` is the key holding the rows. ArcGIS uses "features"; the USDA
+    SSURGO Soil Data Access endpoint uses "Table". Both were swallowing their
+    errors the same way, through `if r.status_code == 200: x = r.json().get(
+    KEY, [])` with a bare `except: pass`, which reports a non-200, an error
+    body and a parse failure as "no rows here".
     """
     status_code = getattr(response, 'status_code', None)
     if status_code is None:
@@ -92,17 +98,17 @@ def classify_response(response):
             detail = f"ArcGIS error: {err}"
         return SERVICE_ERROR, detail, []
 
-    feats = body.get('features')
-    if feats is None:
-        # No "features" key and no "error" key. Not a shape this service is
+    rows = body.get(data_key)
+    if rows is None:
+        # No data key and no "error" key. Not a shape this service is
         # documented to return, so it is not treated as an empty result.
         keys = ', '.join(sorted(body)[:6]) or 'none'
-        return BAD_JSON, f"response has no 'features' key (keys: {keys})", []
-    if not isinstance(feats, list):
-        return BAD_JSON, f"'features' is {type(feats).__name__}, expected a list", []
-    if not feats:
-        return EMPTY, 'service returned zero parcels', []
-    return OK, f"{len(feats)} parcel(s)", feats
+        return BAD_JSON, f"response has no {data_key!r} key (keys: {keys})", []
+    if not isinstance(rows, list):
+        return BAD_JSON, f"{data_key!r} is {type(rows).__name__}, expected a list", []
+    if not rows:
+        return EMPTY, 'service returned zero rows', []
+    return OK, f"{len(rows)} row(s)", rows
 
 
 def classify_exception(exc):
