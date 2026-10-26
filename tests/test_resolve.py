@@ -57,6 +57,32 @@ PRE_MIGRATION = {
     'BBOX': '-83.4,36.5,-76.9,41.3',
 }
 
+# Fields the UPSTREAM SERVICE has since renamed, as {configured key: new name}.
+#
+# PRE_MIGRATION above is a historical record of what the scripts held on
+# 2026-10-04 and is deliberately not edited, because its job is to catch a
+# value drifting by accident. A deliberate, sourced change belongs here
+# instead, so the two stay distinguishable: "the resolver no longer reproduces
+# what it replaced" is a bug, unless the reason is listed below.
+#
+# Acres_C: removed from the WVGIS layer upstream some time between July 2026
+# and 2026-10-12, which is when it started failing every parcel query with
+# "Failed to execute query". Replaced by CALC_ACRE, identified from the
+# layer's own metadata printed by refresh-data run 4 (id 40276191635) on
+# 2026-10-26: 21 fields, and CALC_ACRE is the only one whose name contains
+# ACRE. Not recall, and not a guess.
+UPSTREAM_RENAMES = {
+    'acres': ('Acres_C', 'CALC_ACRE'),
+}
+
+
+def expected_statewide_service():
+    """The pre-migration service config with upstream renames applied."""
+    svc = dict(PRE_MIGRATION['STATEWIDE_SVC'])
+    for key, (_old, new) in UPSTREAM_RENAMES.items():
+        svc[key] = new
+    return svc
+
 # Constants migrated to the registry, as (filename, constant name).
 REWIRED = [
     ('download_data.py', 'STATES'),
@@ -209,7 +235,10 @@ def test_state_names_reproduces_the_literal():
 
 
 def test_statewide_service_reproduces_the_complete_literal():
-    assert resolve.statewide_service('WV') == PRE_MIGRATION['STATEWIDE_SVC']
+    """Reproduces what it replaced, except where the upstream service has
+    since renamed a field. Those are listed in UPSTREAM_RENAMES with their
+    source, so an unexplained change still fails here."""
+    assert resolve.statewide_service('WV') == expected_statewide_service()
 
 
 def test_statewide_service_is_a_superset_of_the_diverged_copy():
@@ -217,10 +246,39 @@ def test_statewide_service_is_a_superset_of_the_diverged_copy():
     both, and this asserts the diverged copy's keys all survive with their
     values intact, so rewiring it changes nothing it actually read."""
     one = resolve.statewide_service('WV')
-    diverged = PRE_MIGRATION['STATEWIDE_SVC_enrich_columns']
+    diverged = dict(PRE_MIGRATION['STATEWIDE_SVC_enrich_columns'])
+    for key, (_old, new) in UPSTREAM_RENAMES.items():
+        if key in diverged:
+            diverged[key] = new
     assert set(diverged) < set(one), "the diverged copy must be a strict subset"
     for k, v in diverged.items():
         assert one[k] == v, k
+
+
+def test_the_acreage_field_is_the_one_the_live_layer_has():
+    """CALC_ACRE, read off the layer's own metadata rather than guessed.
+
+    Acres_C was removed upstream and took out every parcel query for two
+    weeks. This pins the replacement so a silent revert to the dead name
+    fails here instead of in a monthly run.
+    """
+    svc = resolve.statewide_service('WV')
+    assert svc['acres'] == 'CALC_ACRE'
+    assert svc['acres'] != 'Acres_C', "the dead field name is back"
+
+
+def test_the_acreage_field_records_where_it_came_from():
+    """Same rule as the FIPS codes: a value nobody can trace is a value
+    somebody may have typed from memory."""
+    import json
+    raw = json.load(open(os.path.join(schema.REGISTRY_DIR, 'wv.json'),
+                         encoding='utf-8'))
+    source = ((raw.get('notes') or {}).get('sources') or {}).get(
+        'parcels.statewide_service.acres')
+    assert source, "the acreage field name has no recorded source"
+    assert '40276191635' in source, "the source must name the run that established it"
+    assert 'NOT yet confirmed' in source or 'not yet confirmed' in source.lower(), (
+        "the source must still carry the open question about the unit")
 
 
 def test_county_overrides_reproduces_the_literal():
@@ -335,9 +393,12 @@ def test_the_wired_expression_evaluates_to_the_pre_migration_value(
     if name == 'STATE_NAMES':
         scope['STATES'] = eval(ast.unparse(assignment(filename, 'STATES')), scope)
     value = eval(ast.unparse(node), scope)
-    assert value == PRE_MIGRATION[expected_key], (
+    expected = (expected_statewide_service()
+                if expected_key == 'STATEWIDE_SVC'
+                else PRE_MIGRATION[expected_key])
+    assert value == expected, (
         f"{filename}:{name} now evaluates to {value!r}, "
-        f"not the {PRE_MIGRATION[expected_key]!r} it replaced")
+        f"not the {expected!r} expected")
 
 
 def test_the_diverged_parcel_literal_is_gone_from_the_tree():
