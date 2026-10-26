@@ -11,7 +11,7 @@ import warnings
 import pandas as pd
 from pathlib import Path
 from states import resolve
-import parcel_probe
+import source_probe
 
 warnings.filterwarnings("ignore")
 
@@ -41,7 +41,7 @@ def is_likely_vacant(owner: str, landuse: str) -> bool:
 #: Tally across every adjacent-land query, reported at the end of the
 #: run. Without it a site with no neighbours and a site whose query
 #: failed both read as "no_features".
-ADJACENT_OUTCOMES = parcel_probe.OutcomeCounter("WVGIS adjacent-parcel queries")
+ADJACENT_OUTCOMES = source_probe.OutcomeCounter("WVGIS adjacent-parcel queries")
 
 
 def query_adjacent(svc, lon, lat, buffer_m=600):
@@ -62,11 +62,11 @@ def query_adjacent(svc, lon, lat, buffer_m=600):
             "returnGeometry": "false",
             "f": "json",
         }, headers=HEADERS, timeout=20, verify=False)
-        status, detail, feats = parcel_probe.classify_response(r)
+        status, detail, feats = source_probe.classify_response(r)
     except Exception as e:
-        status, detail, feats = parcel_probe.classify_exception(e)
+        status, detail, feats = source_probe.classify_exception(e)
     ADJACENT_OUTCOMES.record(status, detail)
-    if status in parcel_probe.FAILURES:
+    if status in source_probe.FAILURES:
         print(f"    [FAIL] parcel query {status}: {detail}")
     # Returns the STATUS as well as the features. Returning a bare
     # list left the caller with [] for a failure and [] for a genuine
@@ -83,7 +83,7 @@ def summarize_adjacent(site_name, county, lat, lon):
     if not feats and county_key in COUNTY_OVERRIDES:
         svc = COUNTY_OVERRIDES[county_key]
         status, feats = query_adjacent(svc, lon, lat, buffer_m=600)
-    if status in parcel_probe.FAILURES:
+    if status in source_probe.FAILURES:
         # NOT "no_features". The service never answered, so nothing is
         # known about this site's neighbours either way.
         return {"status": "query_failed", "query_status": status,

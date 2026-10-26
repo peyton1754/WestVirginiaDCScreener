@@ -6,7 +6,7 @@ test environment: both pull in geopandas and both do work at module level. So
 each function is located with `ast`, compiled on its own, and run against
 stubbed requests and real-shaped ArcGIS responses.
 
-That matters more here than usual. `tests/test_parcel_probe.py` proves the
+That matters more here than usual. `tests/test_source_probe.py` proves the
 classifier is right; this file proves the classifier is actually WIRED IN, and
 that the callers unpack what the functions now return. Testing the helper alone
 would have passed just as well with the scripts still swallowing every error,
@@ -21,7 +21,7 @@ import pytest
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 
-import parcel_probe as pp  # noqa: E402
+import source_probe as pp  # noqa: E402
 
 
 class FakeResponse:
@@ -57,7 +57,7 @@ def load_function(filename, func_name, extra_globals=None):
     tree = ast.parse(src)
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == func_name:
-            ns = {'parcel_probe': pp, 'HEADERS': {}, '__name__': 'lifted'}
+            ns = {'source_probe': pp, 'HEADERS': {}, '__name__': 'lifted'}
             ns.update(extra_globals or {})
             exec(compile(ast.Module(body=[node], type_ignores=[]),
                          filename, 'exec'), ns)
@@ -91,10 +91,16 @@ TRULY_EMPTY = FakeResponse(200, {'features': []})
 
 # --- enrich_columns.query_parcel_svc --------------------------------------
 
-def enrich_fn(outcome):
+#: What the layer preflight established for this run. Injected because the
+#: lifted function now defaults outFields to it rather than to the registry's
+#: configured names, which is the whole point of the preflight.
+PREFLIGHT_FIELDS = 'FullOwnerName,Acres_C'
+
+
+def enrich_fn(outcome, out_fields=PREFLIGHT_FIELDS):
     req = FakeRequests(outcome)
     fn, _ns = load_function('enrich_columns.py', 'query_parcel_svc',
-                            {'requests': req})
+                            {'requests': req, 'PARCEL_OUT_FIELDS': out_fields})
     return fn, req
 
 
@@ -353,6 +359,114 @@ def test_a_failed_adjacent_query_is_not_written_to_the_csv_as_a_zero():
         assert '_failed' in line, f"{col} still writes a number when the query failed: {line.strip()}"
 
 
+def test_the_parcel_query_defaults_to_what_the_preflight_established():
+    """Not to the registry's configured names. Sending a field the layer does
+    not have is the documented cause of this service's 'Failed to execute
+    query', which is what took out all 25 queries on 2026-10-26."""
+    fn, req = enrich_fn(GOOD, out_fields='ONLY_WHAT_THE_LAYER_HAS')
+    fn(SVC, -80.0, 39.0)
+    assert req.calls[0][1]['params']['outFields'] == 'ONLY_WHAT_THE_LAYER_HAS'
+
+
+def test_the_parcel_query_can_ask_for_every_field():
+    """The fallback when layer metadata is unavailable. outFields=* cannot
+    name a field the layer lacks."""
+    fn, req = enrich_fn(GOOD, out_fields='*')
+    fn(SVC, -80.0, 39.0)
+    assert req.calls[0][1]['params']['outFields'] == '*'
+
+
+def test_attributes_are_read_case_insensitively():
+    """With outFields=* the attribute keys are whatever the layer calls them,
+    and case-insensitive field resolution means the key may differ in case
+    from the registry's spelling. An exact match would silently read None and
+    report the site as having no parcel, which is the bug class being fixed."""
+    differently_cased = FakeResponse(200, {'features': [
+        {'attributes': {'FULLOWNERNAME': 'ACME HOLDINGS LLC', 'acres_c': 31.4}}]})
+    fn, _ = enrich_fn(differently_cased)
+    owner, acres, _imp, status, _d = fn(SVC, -80.0, 39.0)
+    assert status == pp.OK
+    assert owner == 'ACME HOLDINGS LLC', "owner lost to a case difference"
+    assert acres == pytest.approx(31.4), "acreage lost to a case difference"
+
+
+def test_the_two_formerly_swallowed_sources_now_tally_and_report():
+    """water_basin and soil_drainage used the same
+    `if r.status_code == 200: ... except Exception: pass` shape as the parcel
+    query, so a failed service read as an unfilled row."""
+    for counter in ('wbd_outcomes', 'soil_outcomes'):
+        uses = counter_attribute_uses('enrich_columns.py', counter)
+        assert 'record' in uses, f"{counter} is never recorded into"
+        assert uses & {'report', 'lines'}, (
+            f"{counter} is write-only, so its tallies reach nobody")
+
+
+def test_every_classified_response_is_actually_recorded():
+    """The guard that would have caught all three outages at once.
+
+    Checking only that a counter is recorded into SOMEWHERE is too coarse:
+    each source has a second record() call on its parse-error path, so
+    deleting the main one left the name in the file and the test green. A
+    mutation sweep caught that. This instead pairs each classify_* call with
+    a record() of its result, which is the thing that must never be dropped.
+    """
+    src = open(os.path.join(REPO, 'enrich_columns.py'), encoding='utf-8').read()
+    lines = src.splitlines()
+    tree = ast.parse(src)
+
+    classified = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        call = node.value
+        if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and call.func.attr.startswith('classify_')
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == 'source_probe'):
+            classified.append(node.lineno)
+
+    assert len(classified) >= 4, (
+        f"expected a classify call per source plus its exception path, "
+        f"found {len(classified)}")
+
+    # A classified status is handled if it is either recorded into a counter
+    # here, or RETURNED to a caller that records it. query_parcel_svc does the
+    # latter, and requiring record() at the call site would have failed it
+    # wrongly. What must never happen is a status that goes nowhere at all.
+    unhandled = []
+    for lineno in classified:
+        window = '\n'.join(lines[lineno - 1: lineno + 8])
+        recorded = '.record(' in window
+        returned = any(l.strip().startswith('return') and 'status' in l
+                       for l in window.splitlines())
+        if not (recorded or returned):
+            unhandled.append(lineno)
+    assert unhandled == [], (
+        f"a response is classified but its status is neither recorded nor "
+        f"returned, at lines {unhandled}. The classification reaches nobody, "
+        f"which is the same as swallowing it.")
+
+
+def test_no_request_in_the_enrichment_file_still_swallows_its_errors():
+    """Structural guard. Two handlers of the form `except Exception: pass`
+    around a live request are what hid three separate service outages. This
+    fails if one comes back, rather than waiting for another silent run."""
+    src = open(os.path.join(REPO, 'enrich_columns.py'), encoding='utf-8').read()
+    tree = ast.parse(src)
+    swallowed = [n.lineno for n in ast.walk(tree)
+                 if isinstance(n, ast.ExceptHandler)
+                 and len(n.body) == 1 and isinstance(n.body[0], ast.Pass)]
+    assert swallowed == [], f"silent exception handlers at lines {swallowed}"
+
+    # `if r.status_code == 200:` with no else is the other half of the idiom:
+    # it drops every non-200 without a word.
+    offenders = [i for i, line in enumerate(src.splitlines(), 1)
+                 if 'status_code' in line and '200' in line]
+    assert offenders == [], (
+        f"the status-code swallow idiom is back at lines {offenders}; "
+        f"use source_probe.classify_response instead")
+
+
 def test_a_failed_enrich_query_leaves_a_trace_on_disk():
     """Without this the status lives only as long as the terminal scrollback:
     a failed row and a genuinely parcel-less row are byte-identical in
@@ -361,4 +475,4 @@ def test_a_failed_enrich_query_leaves_a_trace_on_disk():
     assert 'QUERY_FAILED:' in src, (
         "a failed parcel query writes nothing to any column, so the "
         "distinction does not survive the run")
-    assert 'parcel_probe.FAILURES' in src
+    assert 'source_probe.FAILURES' in src
