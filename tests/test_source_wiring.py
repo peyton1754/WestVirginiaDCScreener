@@ -321,7 +321,7 @@ def test_the_adjacent_counter_is_read_and_not_only_written():
         f"nobody. Attributes used: {sorted(uses)}")
 
 
-def summarize_with(query_result):
+def summarize_with(query_result, own_acres=30.0):
     """Lift summarize_adjacent with its collaborators stubbed.
 
     Behavioural, not a substring search. The first version of this test
@@ -335,8 +335,17 @@ def summarize_with(query_result):
         'check_adjacent_land.py', 'summarize_adjacent',
         {'STATEWIDE_SVC': SVC, 'COUNTY_OVERRIDES': {},
          'query_adjacent': lambda svc, lon, lat, buffer_m=600: query_result,
-         'is_likely_vacant': lambda owner, landuse: False})
-    return fn('Test Site', 'HARRISON', 39.0, -80.0)
+         'is_likely_vacant': lambda owner, landuse: False,
+         'identify_site_parcel': lambda parcels, own: (0, 'stubbed'),
+         'VACANCY_BASIS': 'owner_name_only',
+         # Lifted from the real source, not stubbed. A stub here would have
+         # hidden the NaN defect that finite_acres exists to close.
+         'finite_acres': load_function('check_adjacent_land.py',
+                                       'finite_acres')[0]})
+    # own_acres is the single base every acreage figure is measured from. It
+    # used to be absent, and the caller added it for the CSV while
+    # expansion_verdict() added the largest parcel in the buffer instead.
+    return fn('Test Site', 'HARRISON', 39.0, -80.0, own_acres)
 
 
 def test_a_failed_adjacent_query_is_not_reported_as_no_parcels():
@@ -379,10 +388,62 @@ def test_a_failed_adjacent_query_is_not_written_to_the_csv_as_a_zero():
     a fabricated measurement in the CSV, and anyone summing or sorting that
     column treats an outage as zero vacancy."""
     src = open(os.path.join(REPO, 'check_adjacent_land.py'), encoding='utf-8').read()
-    for col in ('vacant_adjacent_acres', 'same_owner_adjacent_acres',
-                'total_potential_acres'):
+    for col in ('vacant_adjacent_acres', 'same_owner_adjacent_acres'):
         line = next(l for l in src.splitlines() if f'"{col}":' in l)
         assert '_failed' in line, f"{col} still writes a number when the query failed: {line.strip()}"
+
+
+def total_potential_fn():
+    fn, _ns = load_function('check_adjacent_land.py', 'total_potential_acres')
+    return fn
+
+
+def test_a_failed_query_has_no_total_potential():
+    """Behavioural, not a grep. total_potential_acres() is now the only place
+    this sum is computed, so the guarantee belongs to the function."""
+    fn = total_potential_fn()
+    assert fn({'status': 'query_failed', 'query_status': pp.HTTP_ERROR}) is None
+
+
+def test_a_genuine_empty_still_has_a_total():
+    """The service answered that nothing is adjacent. The total is the site's
+    own acreage, and returning None there would lose a real figure."""
+    fn = total_potential_fn()
+    assert fn({'status': 'no_features', 'base_acres': 30.0,
+               'vacant_acres': 0.0, 'same_owner_acres': 0.0}) == 30.0
+
+
+def test_the_total_is_the_base_plus_both_adjacent_figures():
+    fn = total_potential_fn()
+    assert fn({'status': 'ok', 'base_acres': 28.0,
+               'vacant_acres': 137.8, 'same_owner_acres': 0.0}) == pytest.approx(165.8)
+
+
+def test_the_total_is_none_when_the_base_is_missing():
+    """A sum built on a missing base would silently read as the adjacent
+    acreage alone, which is a smaller number that looks like a measurement."""
+    fn = total_potential_fn()
+    assert fn({'status': 'ok', 'base_acres': None,
+               'vacant_acres': 137.8, 'same_owner_acres': 0.0}) is None
+
+
+def test_the_verdict_and_the_csv_read_the_same_function():
+    """THE REGRESSION TEST for the measured defect. Row 5 of the shipped
+    adjacent_land_25_50ac.csv carried total_potential_acres 165.81604589 next
+    to a verdict reading "STRONG - up to 301 acres possible". The CSV added
+    the candidate row's acreage; the verdict added the largest parcel in the
+    600m box, which for that site is a 163-acre neighbour."""
+    src = open(os.path.join(REPO, 'check_adjacent_land.py'), encoding='utf-8').read()
+    tree = ast.parse(src)
+    callers = {n.lineno for n in ast.walk(tree)
+               if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+               and n.func.id == 'total_potential_acres'}
+    assert len(callers) >= 2, (
+        f"total_potential_acres is called from {len(callers)} place(s). The "
+        f"verdict and the CSV cell must both read it, or they can disagree "
+        f"again")
+    assert 'result["site_acres"] + vacant + same' not in src, (
+        "the verdict is computing its own total again")
 
 
 def test_the_parcel_query_defaults_to_what_the_preflight_established():
