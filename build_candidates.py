@@ -434,7 +434,7 @@ for state in TARGET_STATES:
         print(f"    {len(ghg_company_roots)} GHG company root(s) built from "
               f"{len(ghg_reporters)} reporter(s); {n_no_root} reporter(s) "
               f"yielded no root and so exclude nothing by name")
-        if False:
+        if _single:
             print(f"    [WARN] {len(_single)} root(s) are a SINGLE token and "
                   f"will exclude any candidate whose name contains them: "
                   f"{', '.join(_single)}")

@@ -36,10 +36,20 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      # Deliberately NOT requirements.txt: that pulls geopandas, GDAL and the
-      # rest of the geospatial stack, none of which the registry tests touch.
+      # Deliberately NOT requirements.txt: that pulls geopandas, pyogrio and
+      # GDAL, which the suite does not touch and which cost minutes to build.
+      #
+      # numpy and pandas ARE needed, and were added on 2026-10-26 after the
+      # provenance tests failed in CI with 89 ModuleNotFoundErrors while
+      # passing locally, where both happen to be installed. They are the
+      # version pins from requirements.txt so the suite tests what the
+      # pipeline runs. Both are pure wheels and install in seconds.
+      #
+      # Not skipped-if-absent on purpose: a skip would have turned 89 real
+      # assertions into 89 silent passes, which is the exact failure mode
+      # this branch exists to remove.
       - name: Install test dependencies
-        run: pip install pytest
+        run: pip install pytest 'numpy>=1.26' 'pandas>=2.0'
 
       - name: Run tests
         run: python3 -m pytest tests/ -q
