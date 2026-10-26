@@ -65,6 +65,15 @@ jobs:
             echo "Outputs unchanged; nothing to commit."
           else
             git commit -m "Refresh WV screening outputs (scheduled pipeline run)"
+            # Rebase before pushing. Without this, any run that overlaps a
+            # push to main fails at the last step and throws away its own
+            # output: that happened on 2026-10-26, when a run finished
+            # eight minutes of downloads and screening and was rejected
+            # with "! [rejected] main -> main (fetch first)" because a PR
+            # had merged meanwhile. Only outputs/ is committed here, so a
+            # rebase is safe; a genuine conflict in outputs/ should still
+            # fail loudly rather than be forced.
+            git pull --rebase origin main
             git push
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
