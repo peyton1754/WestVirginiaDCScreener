@@ -52,8 +52,8 @@ def query_adjacent(svc, lon, lat, buffer_m=600):
     pad_lat = buffer_m / 111_000
     pad_lon = buffer_m / (111_000 * 0.78)  # cos(39°) ≈ 0.78
     bbox = f"{lon-pad_lon},{lat-pad_lat},{lon+pad_lon},{lat+pad_lat}"
-    try:
-        r = requests.get(svc["url"], params={
+    status, detail, feats, tries = source_probe.fetch(
+        lambda: requests.get(svc["url"], params={
             "geometry": bbox,
             "geometryType": "esriGeometryEnvelope",
             "inSR": "4326",
@@ -61,11 +61,9 @@ def query_adjacent(svc, lon, lat, buffer_m=600):
             "outFields": out_fields,
             "returnGeometry": "false",
             "f": "json",
-        }, headers=HEADERS, timeout=20, verify=False)
-        status, detail, feats = source_probe.classify_response(r)
-    except Exception as e:
-        status, detail, feats = source_probe.classify_exception(e)
-    ADJACENT_OUTCOMES.record(status, detail)
+        }, headers=HEADERS, timeout=20, verify=False),
+        attempts=3)
+    ADJACENT_OUTCOMES.record(status, detail, tries)
     if status in source_probe.FAILURES:
         print(f"    [FAIL] parcel query {status}: {detail}")
     # Returns the STATUS as well as the features. Returning a bare

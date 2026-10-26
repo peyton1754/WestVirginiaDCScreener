@@ -24,6 +24,15 @@ sys.path.insert(0, REPO)
 import source_probe as pp  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def no_real_backoff(monkeypatch):
+    """The lifted functions call source_probe.fetch without injecting a
+    sleep, so the real backoff would run inside the suite: three attempts at
+    1s then 2s, on every transport-failure fixture. The ATTEMPT COUNT is what
+    these tests assert, and it is unaffected by how long the waits are."""
+    monkeypatch.setattr(pp.time, 'sleep', lambda _s: None)
+
+
 class FakeResponse:
     def __init__(self, status_code=200, payload=None, raises=None):
         self.status_code = status_code
@@ -104,17 +113,24 @@ def enrich_fn(outcome, out_fields=PREFLIGHT_FIELDS):
     return fn, req
 
 
-def test_enrich_returns_five_values_including_a_status():
-    """The caller unpacks five. If this function still returned three, the
-    caller would raise at runtime on the first candidate."""
+def test_enrich_returns_six_values_including_a_status_and_the_attempt_count():
+    """The caller unpacks six. If this function still returned three, the
+    caller would raise at runtime on the first candidate.
+
+    `tries` joined the tuple when the retry landed. It is not decoration: the
+    caller passes it to OutcomeCounter.record, which is the only thing that
+    makes the retry's effect visible in a run log.
+    """
     fn, _ = enrich_fn(GOOD)
     result = fn(SVC, -80.0, 39.0)
-    assert len(result) == 5, f"expected (owner, acres, imp, status, detail), got {result!r}"
+    assert len(result) == 6, (
+        f"expected (owner, acres, imp, status, detail, tries), got {result!r}")
+    assert result[5] == 1, "a clean first attempt must report one try"
 
 
 def test_enrich_reads_a_real_parcel_and_picks_the_largest():
     fn, _ = enrich_fn(GOOD)
-    owner, acres, _imp, status, _detail = fn(SVC, -80.0, 39.0)
+    owner, acres, _imp, status, _detail, _tries = fn(SVC, -80.0, 39.0)
     assert status == pp.OK
     assert owner == 'ACME HOLDINGS LLC'
     assert acres == pytest.approx(31.4)
@@ -122,7 +138,7 @@ def test_enrich_reads_a_real_parcel_and_picks_the_largest():
 
 def test_enrich_reports_a_genuine_empty_as_empty():
     fn, _ = enrich_fn(TRULY_EMPTY)
-    owner, acres, _imp, status, _detail = fn(SVC, -80.0, 39.0)
+    owner, acres, _imp, status, _detail, _tries = fn(SVC, -80.0, 39.0)
     assert status == pp.EMPTY
     assert owner is None and acres is None
 
@@ -131,8 +147,9 @@ def test_enrich_reports_the_wvgis_400_as_a_failure_not_an_empty_site():
     """This is the Phase 1 case. Before the fix it returned (None, None, None),
     identical to a site with no parcel, and the run reported 0 matches."""
     fn, _ = enrich_fn(WVGIS_400)
-    owner, acres, _imp, status, detail = fn(SVC, -80.0, 39.0)
+    owner, acres, _imp, status, detail, tries = fn(SVC, -80.0, 39.0)
     assert status == pp.HTTP_ERROR, "an HTTP 400 must not read as 'no parcel here'"
+    assert tries == 1, "a 400 is a wrong request; retrying it only takes longer to fail"
     assert status in pp.FAILURES
     assert '400' in detail
     assert owner is None and acres is None
@@ -140,9 +157,12 @@ def test_enrich_reports_the_wvgis_400_as_a_failure_not_an_empty_site():
 
 def test_enrich_reports_an_arcgis_200_error_as_a_failure():
     fn, _ = enrich_fn(ARCGIS_200_ERROR)
-    _o, _a, _i, status, detail = fn(SVC, -80.0, 39.0)
+    _o, _a, _i, status, detail, tries = fn(SVC, -80.0, 39.0)
     assert status == pp.SERVICE_ERROR
     assert 'Unable to complete operation' in detail
+    assert tries == 1, (
+        'the 2026-10-26 outage was this body on 25 queries; retrying it '
+        'would have tripled the wall clock and reported the same nothing')
 
 
 @pytest.mark.parametrize('exc', [
@@ -152,9 +172,12 @@ def test_enrich_reports_an_arcgis_200_error_as_a_failure():
 ])
 def test_enrich_reports_a_transport_failure_with_its_type(exc):
     fn, _ = enrich_fn(exc)
-    _o, _a, _i, status, detail = fn(SVC, -80.0, 39.0)
+    _o, _a, _i, status, detail, tries = fn(SVC, -80.0, 39.0)
     assert status == pp.TRANSPORT_ERROR
     assert type(exc).__name__ in detail
+    assert tries == 3, (
+        'a transport failure is the class a retry recovers, so the real '
+        'function must have attempted it more than once')
 
 
 def test_enrich_still_sends_the_envelope_query_this_service_requires():
@@ -179,7 +202,7 @@ def test_enrich_files_a_malformed_feature_as_bad_json_not_a_network_failure():
     had failed when it had not."""
     malformed = FakeResponse(200, {'features': [{'no_attributes_key': 1}]})
     fn, _ = enrich_fn(malformed)
-    _o, _a, _i, status, detail = fn(SVC, -80.0, 39.0)
+    _o, _a, _i, status, detail, _tries = fn(SVC, -80.0, 39.0)
     assert status == pp.BAD_JSON, f"got {status}, which blames the wrong layer"
     assert status in pp.FAILURES
     assert 'attributes' in detail
@@ -189,7 +212,7 @@ def test_enrich_files_a_non_numeric_acreage_as_bad_json():
     weird = FakeResponse(200, {'features': [
         {'attributes': {'FullOwnerName': 'ACME', 'Acres_C': 'not a number'}}]})
     fn, _ = enrich_fn(weird)
-    _o, _a, _i, status, _d = fn(SVC, -80.0, 39.0)
+    _o, _a, _i, status, _d, _t = fn(SVC, -80.0, 39.0)
     assert status == pp.BAD_JSON
 
 
@@ -257,9 +280,12 @@ def test_the_enrich_caller_unpacks_the_status():
     """A grep-level guard on the call sites. If someone restores a three-value
     unpack the function's status is silently discarded again."""
     src = open(os.path.join(REPO, 'enrich_columns.py'), encoding='utf-8').read()
-    assert 'owner, acres, imp, status, detail = query_parcel_svc(' in src
+    assert 'owner, acres, imp, status, detail, tries = query_parcel_svc(' in src
     assert 'owner, acres, imp = query_parcel_svc(' not in src, (
         "a caller still unpacks three values and drops the status")
+    assert 'owner, acres, imp, status, detail = query_parcel_svc(' not in src, (
+        "a caller unpacks five and drops the attempt count, so the retry's "
+        "effect never reaches the run log")
 
 
 def test_the_enrich_caller_reports_its_outcomes():
@@ -384,7 +410,7 @@ def test_attributes_are_read_case_insensitively():
     differently_cased = FakeResponse(200, {'features': [
         {'attributes': {'FULLOWNERNAME': 'ACME HOLDINGS LLC', 'acres_c': 31.4}}]})
     fn, _ = enrich_fn(differently_cased)
-    owner, acres, _imp, status, _d = fn(SVC, -80.0, 39.0)
+    owner, acres, _imp, status, _d, _t = fn(SVC, -80.0, 39.0)
     assert status == pp.OK
     assert owner == 'ACME HOLDINGS LLC', "owner lost to a case difference"
     assert acres == pytest.approx(31.4), "acreage lost to a case difference"
@@ -414,28 +440,37 @@ def test_every_classified_response_is_actually_recorded():
     lines = src.splitlines()
     tree = ast.parse(src)
 
+    # `fetch` counts as a classification site: it calls classify_response
+    # and classify_exception itself, so a status it returns is exactly as
+    # droppable as one classified inline. A test that knew only about
+    # classify_* went to zero findings the moment the call sites moved to
+    # fetch, and read that as a clean file.
+    HANDLERS = ('classify_', 'fetch')
     classified = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
             continue
         call = node.value
         if (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                and call.func.attr.startswith('classify_')
+                and any(call.func.attr.startswith(h) for h in HANDLERS)
                 and isinstance(call.func.value, ast.Name)
                 and call.func.value.id == 'source_probe'):
-            classified.append(node.lineno)
+            # end_lineno, not lineno. A fetch() call is a dozen lines of
+            # params, so a window measured from the FIRST line ends inside
+            # the call's own arguments and never sees the record() below it.
+            classified.append((node.lineno, node.end_lineno))
 
-    assert len(classified) >= 4, (
-        f"expected a classify call per source plus its exception path, "
-        f"found {len(classified)}")
+    assert len(classified) >= 3, (
+        f"expected a classified or fetched response per source (water_basin, "
+        f"soil, parcel), found {len(classified)}")
 
     # A classified status is handled if it is either recorded into a counter
     # here, or RETURNED to a caller that records it. query_parcel_svc does the
     # latter, and requiring record() at the call site would have failed it
     # wrongly. What must never happen is a status that goes nowhere at all.
     unhandled = []
-    for lineno in classified:
-        window = '\n'.join(lines[lineno - 1: lineno + 8])
+    for lineno, end_lineno in classified:
+        window = '\n'.join(lines[end_lineno - 1: end_lineno + 8])
         recorded = '.record(' in window
         returned = any(l.strip().startswith('return') and 'status' in l
                        for l in window.splitlines())
@@ -476,3 +511,97 @@ def test_a_failed_enrich_query_leaves_a_trace_on_disk():
         "a failed parcel query writes nothing to any column, so the "
         "distinction does not survive the run")
     assert 'source_probe.FAILURES' in src
+
+
+# --- the retry must be IN the pipeline, not merely available --------------
+# A mutation sweep on 2026-10-26 found four vacuous spots at once: changing
+# `attempts=3` to `attempts=1` at the water_basin, soil and adjacency call
+# sites, and dropping `tries` from a counter's record(), all left the suite
+# green. source_probe's own tests prove the retry WORKS; only these prove it
+# is wired into the scripts, which is the same gap that let three services
+# swallow their errors for weeks while the helper beneath them was correct.
+
+RETRY_SITES = [
+    ('enrich_columns.py', 'WBD_URL'),      # water_basin: the measured failures
+    ('enrich_columns.py', 'SSURGO_URL'),   # soil
+    ('enrich_columns.py', "svc[\"url\"]"),  # the parcel query
+    ('check_adjacent_land.py', "svc[\"url\"]"),
+]
+
+
+def fetch_calls(filename):
+    """Every `source_probe.fetch(...)` call in a module, as AST nodes."""
+    src = open(os.path.join(REPO, filename), encoding='utf-8').read()
+    tree = ast.parse(src)
+    out = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == 'fetch'
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == 'source_probe'):
+            out.append((node, ast.get_source_segment(src, node) or ''))
+    return out
+
+
+@pytest.mark.parametrize('filename,url_marker', RETRY_SITES)
+def test_every_fetch_site_actually_retries(filename, url_marker):
+    """`attempts=1` is not a retry. It is the pre-fix behaviour with a new
+    function name in front of it."""
+    matching = [(n, seg) for n, seg in fetch_calls(filename) if url_marker in seg]
+    assert matching, (
+        f"no source_probe.fetch call in {filename} mentions {url_marker}. "
+        f"Either the call site moved or it no longer goes through fetch at all")
+    for node, seg in matching:
+        attempts = next((kw.value for kw in node.keywords if kw.arg == 'attempts'), None)
+        assert attempts is not None, (
+            f"{filename}:{node.lineno} fetches without naming `attempts`, so "
+            f"the retry count is whatever the default happens to be")
+        assert isinstance(attempts, ast.Constant) and attempts.value >= 2, (
+            f"{filename}:{node.lineno} passes attempts={getattr(attempts, 'value', '?')}, "
+            f"which performs no retry")
+
+
+def test_the_positive_control_for_the_marker_search():
+    """If a marker matched nothing the test above would fail loudly, but a
+    marker that matches the WRONG call would pass quietly. This pins the
+    count: four fetch sites across the two files, no more and no fewer."""
+    total = len(fetch_calls('enrich_columns.py')) + len(fetch_calls('check_adjacent_land.py'))
+    assert total == 4, (
+        f"expected 4 fetch call sites (water_basin, soil, parcel, adjacency), "
+        f"found {total}. A new one needs a row in RETRY_SITES or it is "
+        f"unguarded; a lost one means a source went back to a bare request")
+
+
+COUNTER_SITES = [
+    ('enrich_columns.py', 'wbd_outcomes'),
+    ('enrich_columns.py', 'soil_outcomes'),
+    ('enrich_columns.py', 'statewide_outcomes'),
+    ('enrich_columns.py', 'county_outcomes'),
+    ('check_adjacent_land.py', 'ADJACENT_OUTCOMES'),
+]
+
+
+@pytest.mark.parametrize('filename,counter', COUNTER_SITES)
+def test_the_attempt_count_reaches_the_counter(filename, counter):
+    """A retry whose effect is never reported is an assumption. The counter's
+    recovery line is the only place a run says what the retry bought, and it
+    needs `tries` to say it.
+
+    The parse-error paths deliberately call record() with two arguments: the
+    initial record already counted the retry, and calling it again with
+    `tries` would double-count. So this asserts that AT LEAST ONE record()
+    on each counter carries the attempt count, not that every one does.
+    """
+    src = open(os.path.join(REPO, filename), encoding='utf-8').read()
+    tree = ast.parse(src)
+    calls = [n for n in ast.walk(tree)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and n.func.attr == 'record' and isinstance(n.func.value, ast.Name)
+             and n.func.value.id == counter]
+    assert calls, f"nothing records into {counter} in {filename}"
+    with_tries = [n for n in calls
+                  if len(n.args) >= 3
+                  or any(kw.arg == 'tries' for kw in n.keywords)]
+    assert with_tries, (
+        f"every {counter}.record() in {filename} drops the attempt count, so "
+        f"the run log cannot say whether any query recovered on a retry")
