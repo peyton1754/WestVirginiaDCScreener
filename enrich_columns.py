@@ -262,6 +262,9 @@ def query_parcel_svc(svc, lon, lat, out_fields=None):
                 f"{type(e).__name__} reading parcel attributes: {e}", tries)
     return owner, acres, imp, source_probe.OK, detail, tries
 
+if "acres_source" not in cands.columns:
+    cands["acres_source"] = ""
+
 n_cty = 0
 statewide_outcomes = source_probe.OutcomeCounter("WVGIS statewide parcel service")
 county_outcomes = source_probe.OutcomeCounter("county GIS parcel services")
@@ -292,6 +295,11 @@ for i in range(len(cands)):
     if acres and acres > 0:
         cands.at[cands.index[i], "parcel_acres"] = acres
         cands.at[cands.index[i], "cad_acres"] = str(round(acres, 1))
+        # Attributed, because this is the one acreage source with a
+        # documented limitation -- a point query returns whatever polygon
+        # the point lands in -- and it was the one source left unlabelled.
+        # The EPA override below sets its own value and takes precedence.
+        cands.at[cands.index[i], "acres_source"] = source
     if imp:
         cands.at[cands.index[i], "cad_imp_value"] = str(int(imp))
     if owner or acres:
