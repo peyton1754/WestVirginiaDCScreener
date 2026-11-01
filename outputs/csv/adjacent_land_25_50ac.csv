@@ -1,3 +1,3 @@
-rank,Plant_Name,City,County,site_acres,site_owner,vacant_adjacent_acres,same_owner_adjacent_acres,total_potential_acres,expansion_verdict
-5,AURORA ACQUISITION CORPORATION,HEPZIBAH,HARRISON,28.01604589,FRANZ CHARLES BRADLEY,137.8,0.0,165.81604589,STRONG — up to 301 acres possible (site + adjacent vacant/same-owner land)
-16,"LOWE PRODUCTS COMPANY, INC.",SHEPHERDSTOWN,JEFFERSON,41.81024984,OLDCASTLE LAWN & GARDEN INC,6.4,30.1,78.31024984,MODERATE — up to 78 acres possible
+rank,Plant_Name,City,County,site_acres,site_owner,site_parcel_identified,site_parcel_acres,vacancy_basis,vacant_adjacent_acres,same_owner_adjacent_acres,total_potential_acres,expansion_verdict
+5,AURORA ACQUISITION CORPORATION,HEPZIBAH,HARRISON,28.01604589,FRANKLIN BRADLEY T,True,28.01604589,owner_name_only,137.8,37.1,202.91604589,STRONG — up to 203 acres possible (site + adjacent vacant/same-owner land) [vacancy inferred from owner names only]
+15,"LOWE PRODUCTS COMPANY, INC.",SHEPHERDSTOWN,JEFFERSON,41.81024984,OLDCASTLE LAWN & GARDEN INC,True,41.81024984,owner_name_only,6.4,30.1,78.31024984,MODERATE — up to 78 acres possible [vacancy inferred from owner names only]
