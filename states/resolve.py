@@ -26,10 +26,15 @@ each gains a test that fails if it drifts from the registry.
 
 1. `score_and_export.STATE_SCORE` carries GA, NC and OH, which are not on the
    combined map and have no registry entry. Migrating it would either drop
-   those three scores (every GA site would silently score 0 on the state axis,
-   because the consumer is `.map(STATE_SCORE).fillna(0)`) or require declaring
-   three states nobody intends to screen. It is already pinned by
+   those three scores (the consumer is `.map(STATE_SCORE).fillna(0)`, so a GA
+   row would silently read 0) or require declaring three states nobody
+   intends to screen. It is already pinned by
    `test_every_sourced_state_score_reaches_the_registry`.
+
+   As of 2026-10-26 it is a REFERENCE table rather than a scored axis, so the
+   stakes of that decision are lower than they were: nothing a site scores
+   depends on it. The reasons it was removed are recorded beside the table
+   itself.
 
 2. `download_gas_pipelines_wv.BBOX` is the registry bbox padded by roughly 40
    miles, but the pad was applied by hand to a ROUNDED bbox and is not uniform

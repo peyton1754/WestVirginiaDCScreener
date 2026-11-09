@@ -148,13 +148,57 @@ def a_declared_state():
     return None
 
 
-def test_selection_refuses_a_declared_state_and_names_its_gaps():
+#: A synthetic state that cannot run, for when the registry contains none.
+#: Two gaps on purpose, because the refusal is required to name EVERY gap and
+#: a single-gap fixture cannot tell "names them all" from "names the first".
+DECLARED_STUB_CODE = 'ZZ'
+DECLARED_STUB = {
+    'abbr': 'ZZ', 'name': 'Nowhere', 'nhd_name': 'Nowhere',
+    'fips': None, 'bbox': None, 'state_score': None,
+    'parcels': {'statewide_service': None, 'county_overrides': {}},
+}
+
+
+def with_declared_state(monkeypatch):
+    """Make a declared state exist, returning its code.
+
+    Prefers a real one. Falls back to the stub, which is what happens now
+    that no registry state is declared: state_score left schema.REQUIRED on
+    2026-10-26, and it was the only field holding five states at `declared`.
+    """
+    real = a_declared_state()
+    if real is not None:
+        return real
+
+    import copy
+    real_load = schema.load
+
+    def fake_load(abbr):
+        if str(abbr).upper() == DECLARED_STUB_CODE:
+            return copy.deepcopy(DECLARED_STUB)
+        return real_load(abbr)
+
+    monkeypatch.setattr(schema, 'load', fake_load)
+    monkeypatch.setattr(schema, 'all_codes',
+                        lambda: sorted(set(schema.load_all()) | {DECLARED_STUB_CODE}))
+    return DECLARED_STUB_CODE
+
+
+def test_the_stub_is_actually_declared():
+    """A control on the fixture. If the stub were runnable, both tests below
+    would pass by never reaching the refusal they exist to check."""
+    level, reasons = schema.readiness(DECLARED_STUB)
+    assert level == schema.READY_DECLARED, (
+        f"the stub reads as {level!r}, so it cannot exercise a refusal")
+    assert len(reasons) >= 2, (
+        f"the stub has {len(reasons)} gap(s); two are needed to tell "
+        f"'names every gap' from 'names the first'")
+
+def test_selection_refuses_a_declared_state_and_names_its_gaps(monkeypatch):
     """A declared state must be refused at startup, with the unfilled field
     named, rather than letting a 1 to 2 GB download run and then filter a
     state that was never configured."""
-    code = a_declared_state()
-    if code is None:
-        pytest.skip("no declared state in the registry to exercise the refusal")
+    code = with_declared_state(monkeypatch)
     _level, reasons = schema.readiness(schema.load(code))
     with pytest.raises(schema.StateConfigError) as e:
         resolve.selected(env={resolve.SELECT_ENV: code})
@@ -162,6 +206,13 @@ def test_selection_refuses_a_declared_state_and_names_its_gaps():
     assert code in msg, msg
     # Every gap the readiness report names must reach the refusal, so the
     # person reading it learns the whole remaining job and not just the first.
+    # Two or more, asserted HERE rather than only in a control on the
+    # fixture. With one gap the loop below cannot tell "names every gap"
+    # from "names the first", and a mutation that relaxed the control's own
+    # bound was invisible to the suite.
+    assert len(reasons) >= 2, (
+        f"{code} has {len(reasons)} gap(s); this test cannot distinguish "
+        f"'names every gap' from 'names the first' with fewer than two")
     for r in reasons:
         assert r in msg, f"refusal omitted a gap: {r!r}"
 
@@ -205,12 +256,10 @@ def test_single_selected_refuses_two_states_and_names_the_script(monkeypatch):
     assert 'WV, TN' in msg, "the refusal must list which states were selected"
 
 
-def test_single_selected_still_validates_readiness_first():
+def test_single_selected_still_validates_readiness_first(monkeypatch):
     """One declared state must fail the readiness check rather than slip
     through the count check as 'well, it is only one state'."""
-    code = a_declared_state()
-    if code is None:
-        pytest.skip("no declared state in the registry to exercise the refusal")
+    code = with_declared_state(monkeypatch)
     with pytest.raises(schema.StateConfigError) as e:
         resolve.single_selected('x', env={resolve.SELECT_ENV: code})
     assert code in str(e.value)
